@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rl-llm-thermal-manager"
+version = "0.1.0"
+description = "RL LLM Thermal Manager — Hybrid AI System (OpenEnv compliant)"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+
+dependencies = [
+  "streamlit>=1.40.0",
+  "numpy>=2.0.0",
+  "pandas>=2.2.0",
+  "plotly>=5.22.0",
+]
+
+[tool.setuptools]
+py-modules = []
