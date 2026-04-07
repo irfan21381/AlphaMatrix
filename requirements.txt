@@ -4,4 +4,3 @@ pydantic>=2.9.0
 streamlit>=1.40.0
 matplotlib>=3.9.0
 numpy>=2.0.0
-requests>=2.32.0
