@@ -610,21 +610,49 @@ if "learning_curve" not in st.session_state:
 
 
 # ===================== 🔥 UPDATED RECORD =====================
+# def _record(step, cpu, bat, rew, act):
+#     st.session_state.steps.append(step)
+#     st.session_state.cpu_hist.append(cpu)
+#     st.session_state.bat_hist.append(bat)
+#     st.session_state.rew_hist.append(rew)
+#     st.session_state.act_hist.append(act)
+#     st.session_state.total_reward += rew
+
+#     # 🔥 learning curve
+#     st.session_state.learning_curve.append(st.session_state.total_reward)
+
+#     # 🔥 confidence tracking
+#     state = {"cpu": cpu, "battery": bat}
+#     _, scores = st.session_state.hybrid_agent.plan(state)
+#     st.session_state.confidence_hist.append(list(scores.values()))
+
 def _record(step, cpu, bat, rew, act):
     st.session_state.steps.append(step)
     st.session_state.cpu_hist.append(cpu)
     st.session_state.bat_hist.append(bat)
     st.session_state.rew_hist.append(rew)
     st.session_state.act_hist.append(act)
-    st.session_state.total_reward += rew
 
-    # 🔥 learning curve
+    # ✅ FIX: cumulative reward
+    st.session_state.total_reward = round(st.session_state.total_reward + rew, 4)
+
+    # ✅ FIX: learning curve
+    if "learning_curve" not in st.session_state:
+        st.session_state.learning_curve = []
     st.session_state.learning_curve.append(st.session_state.total_reward)
 
-    # 🔥 confidence tracking
+    # ✅ FIX: confidence tracking
+    if "confidence_hist" not in st.session_state:
+        st.session_state.confidence_hist = []
+
     state = {"cpu": cpu, "battery": bat}
-    _, scores = st.session_state.hybrid_agent.plan(state)
-    st.session_state.confidence_hist.append(list(scores.values()))
+
+    try:
+        _, scores = st.session_state.hybrid_agent.plan(state)
+        st.session_state.confidence_hist.append(list(scores.values()))
+    except:
+        # fallback to avoid crash
+        st.session_state.confidence_hist.append([0.25, 0.25, 0.25, 0.25])
 
 
 # ===================== 🔥 CONFIDENCE GRAPH =====================
