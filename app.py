@@ -164,9 +164,7 @@ def api_step(body: StepSchema):
     return rec
 
 
-@app.get("/")
-def root():
-    return {"message": "AlphaMatrix Backend Running 🚀"}
+
 
 @api.get("/state")
 def api_state():
