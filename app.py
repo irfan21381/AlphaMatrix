@@ -113,19 +113,21 @@ class ExplainSchema(BaseModel):
     state_after:  dict
 
 
-api = FastAPI(title="RL Thermal Manager")
-api.add_middleware(
+
+app = FastAPI(title="RL Thermal Manager")
+api = app
+app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"], allow_methods=["*"], allow_headers=["*"],
 )
 
 
-@api.get("/health")
+@app.get("/health")
 def health():
     return {"status": "ok"}
 
 
-@api.post("/reset")
+@app.post("/reset")
 def api_reset(init: Optional[InitSchema] = None):
     global _episode_step, _total_reward, _history, _initialized, _init_params
     p = init or InitSchema()
@@ -142,7 +144,7 @@ def api_reset(init: Optional[InitSchema] = None):
     return {"status": "reset", "observation": obs, "init_params": _init_params}
 
 
-@api.post("/step")
+@app.post("/step")
 def api_step(body: StepSchema):
     global _episode_step, _total_reward, _history
     if not _initialized:
@@ -164,7 +166,7 @@ def api_step(body: StepSchema):
     return rec
 
 
-@api.get("/state")
+@app.get("/state")
 def api_state():
     if not _initialized:
         raise HTTPException(400, "Call /reset first.")
@@ -178,7 +180,7 @@ def api_state():
         }
 
 
-@api.post("/explain")
+@app.post("/explain")
 def api_explain(body: ExplainSchema):
     s0, s1 = body.state_before, body.state_after
     dc  = s0.get("cpu", 0) - s1.get("cpu", 0)
@@ -198,23 +200,23 @@ def api_explain(body: ExplainSchema):
     }
 
 
-def _run_backend():
-    uvicorn.run(api, host="0.0.0.0", port=8000, log_level="error")
+# def _run_backend():
+#     uvicorn.run(api, host="0.0.0.0", port=8000, log_level="error")
 
 
-# ── Start backend thread exactly once ────────────────────────────────────────
-if "backend_started" not in st.session_state:
-    t = threading.Thread(target=_run_backend, daemon=True)
-    t.start()
-    st.session_state["backend_started"] = True
-    time.sleep(3)
+# # ── Start backend thread exactly once ────────────────────────────────────────
+# if "backend_started" not in st.session_state:
+#     t = threading.Thread(target=_run_backend, daemon=True)
+#     t.start()
+#     st.session_state["backend_started"] = True
+#     time.sleep(3)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  PART 3 — STREAMLIT FRONTEND
 # ═══════════════════════════════════════════════════════════════════════════════
 
-BACKEND  = "http://127.0.0.1:8000"
+# BACKEND  = "http://127.0.0.1:8000"
 INTERVAL = 0.8
 
 ACTION_COLORS = {
@@ -287,7 +289,8 @@ for _k, _v in dict(
 
 def _post(path, payload=None):
     try:
-        r = requests.post(f"{BACKEND}{path}", json=payload or {}, timeout=5)
+        url = path if path.startswith("http") else f"{path}"
+        r = requests.post(url, json=payload or {}, timeout=5)
         r.raise_for_status()
         return r.json(), None
     except Exception as e:
@@ -296,12 +299,12 @@ def _post(path, payload=None):
 
 def _get(path):
     try:
-        r = requests.get(f"{BACKEND}{path}", timeout=5)
+        url = path if path.startswith("http") else f"{path}"
+        r = requests.get(url, timeout=5)
         r.raise_for_status()
         return r.json(), None
     except Exception as e:
         return None, str(e)
-
 
 def _record(step, cpu, bat, rew, act):
     st.session_state.steps.append(step)
