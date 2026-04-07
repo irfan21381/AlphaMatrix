@@ -115,6 +115,10 @@ def state():
         }
 
 
+@app.get("/")
+def root():
+    return {"message": "AlphaMatrix Backend Running 🚀"}
+
 @app.get("/history")
 def history():
     with _lock:
