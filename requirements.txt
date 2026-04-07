@@ -1,7 +1,7 @@
-fastapi==0.110.2
-uvicorn==0.29.0
-pydantic==2.7.1
-streamlit==1.32.2
-matplotlib==3.8.4
-numpy==1.26.4
-requests==2.31.0
+fastapi>=0.115.0
+uvicorn>=0.29.0
+pydantic>=2.10.0
+streamlit>=1.40.0
+matplotlib>=3.9.0
+numpy>=2.0.0
+requests>=2.31.0
