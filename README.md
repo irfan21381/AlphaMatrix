@@ -1,12 +1,13 @@
 ---
-title: AlphaMatrix AI System
-emoji: 🕸️
+title: RL LLM Thermal Manager
+emoji: ⚡
 colorFrom: blue
 colorTo: indigo
-sdk: docker
+sdk: streamlit
+sdk_version: 1.32.2
 app_file: app.py
 pinned: false
 ---
 
-# AlphaMatrix: OpenEnv Optimization Agent
-Reinforcement Learning and LLM Hybrid System Optimizer.
+# ⚡ RL-LLM Hybrid Thermal Manager
+A Hybrid RL + LLM thermal management system with a live debugger dashboard.
