@@ -1,6 +1,8 @@
 """
-app.py — RL-LLM Thermal Manager for HuggingFace Spaces
-Python 3.13 compatible. FastAPI in daemon thread + Streamlit on port 7860.
+app.py — RL-LLM Thermal Manager  (HuggingFace Spaces, Python 3.13)
+FastAPI backend runs in a daemon thread on port 8000.
+Streamlit frontend runs on port 7860 (HF required port).
+No version-pinned packages — uses whatever HF installs.
 """
 
 import os
@@ -30,15 +32,15 @@ ACTIONS: List[str] = [
     "throttle_gpu",
     "hibernate_idle",
 ]
-CPU_SAFE    = 60.0
-BAT_SAFE    = 50.0
-MAX_IMPROVE = 30.0
+CPU_SAFE     = 60.0
+BAT_SAFE     = 50.0
+MAX_IMPROVE  = 30.0   # max CPU drop (20) + max battery gain (10)
 
 
 class DisasterEnv:
     def __init__(self):
-        self._cpu = 85.0
-        self._bat = 30.0
+        self._cpu  = 85.0
+        self._bat  = 30.0
         self._step = 0
 
     def reset(self, cpu: float = 85.0, battery: float = 30.0) -> dict:
@@ -55,16 +57,22 @@ class DisasterEnv:
             dc, db = random.uniform(10, 20), random.uniform(1, 5)
         elif action == "throttle_gpu":
             dc, db = random.uniform(5, 12),  random.uniform(3, 8)
-        else:
+        else:  # hibernate_idle
             dc, db = random.uniform(3, 10),  random.uniform(5, 10)
-        self._cpu = max(0.0, min(100.0, self._cpu - dc))
-        self._bat = max(0.0, min(100.0, self._bat + db))
+
+        self._cpu  = max(0.0, min(100.0, self._cpu - dc))
+        self._bat  = max(0.0, min(100.0, self._bat + db))
         self._step += 1
-        reward = round(min(1.0, (max(0, c0 - self._cpu) + max(0, self._bat - b0)) / MAX_IMPROVE), 4)
-        done   = (self._cpu <= CPU_SAFE and self._bat >= BAT_SAFE) or self._step >= 50
-        info   = {"delta_cpu": round(c0 - self._cpu, 3),
-                  "delta_bat": round(self._bat - b0, 3),
-                  "step": self._step}
+
+        reward = round(
+            min(1.0, (max(0, c0 - self._cpu) + max(0, self._bat - b0)) / MAX_IMPROVE), 4
+        )
+        done = (self._cpu <= CPU_SAFE and self._bat >= BAT_SAFE) or self._step >= 50
+        info = {
+            "delta_cpu": round(c0 - self._cpu, 3),
+            "delta_bat": round(self._bat - b0, 3),
+            "step":      self._step,
+        }
         return self._obs(), reward, done, info
 
     def _obs(self):
@@ -75,15 +83,15 @@ class DisasterEnv:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-#  PART 2 — FASTAPI BACKEND  (daemon thread, port 8000)
+#  PART 2 — FASTAPI BACKEND  (daemon thread on port 8000)
 # ═══════════════════════════════════════════════════════════════════════════════
 
-_lock          = threading.Lock()
-_env           = DisasterEnv()
-_episode_step  = 0
-_total_reward  = 0.0
+_lock         = threading.Lock()
+_env          = DisasterEnv()
+_episode_step = 0
+_total_reward = 0.0
 _history: list = []
-_initialized   = False
+_initialized  = False
 _init_params: dict = {}
 
 
@@ -120,13 +128,15 @@ def api_reset(init: Optional[InitSchema] = None):
     global _episode_step, _total_reward, _history, _initialized, _init_params
     p = init or InitSchema()
     with _lock:
-        obs = _env.reset(cpu=p.cpu, battery=p.battery)
+        obs           = _env.reset(cpu=p.cpu, battery=p.battery)
         _episode_step = 0
         _total_reward = 0.0
         _history      = []
         _initialized  = True
-        _init_params  = {"cpu": p.cpu, "battery": p.battery,
-                         "incident_description": p.incident_description}
+        _init_params  = {
+            "cpu": p.cpu, "battery": p.battery,
+            "incident_description": p.incident_description,
+        }
     return {"status": "reset", "observation": obs, "init_params": _init_params}
 
 
@@ -162,22 +172,22 @@ def api_state():
             "step":         _episode_step,
             "total_reward": round(_total_reward, 4),
             "done":         _env.is_done(),
+            "init_params":  _init_params,
         }
 
 
 @api.post("/explain")
 def api_explain(body: ExplainSchema):
     s0, s1 = body.state_before, body.state_after
-    dc = s0.get("cpu", 0) - s1.get("cpu", 0)
-    db = s1.get("battery", 0) - s0.get("battery", 0)
+    dc  = s0.get("cpu", 0) - s1.get("cpu", 0)
+    db  = s1.get("battery", 0) - s0.get("battery", 0)
     msgs = {
         "optimize_cpu":   f"CPU scheduler rebalanced. CPU dropped {dc:.1f}%.",
         "close_apps":     f"Background apps killed. CPU ↓{dc:.1f}%, Battery ↑{db:.1f}%.",
         "throttle_gpu":   f"GPU clocks throttled. CPU ↓{dc:.1f}%, Battery ↑{db:.1f}%.",
         "hibernate_idle": f"Idle procs hibernated. CPU ↓{dc:.1f}%, Battery ↑{db:.1f}%.",
     }
-    sev = ("CRITICAL" if s0.get("cpu", 0) > 90
-           else "HIGH" if s0.get("cpu", 0) > 75 else "MODERATE")
+    sev = "CRITICAL" if s0.get("cpu", 0) > 90 else ("HIGH" if s0.get("cpu", 0) > 75 else "MODERATE")
     return {
         "action":               body.action,
         "rationale":            msgs.get(body.action, f"Applied {body.action}."),
@@ -190,7 +200,7 @@ def _run_backend():
     uvicorn.run(api, host="0.0.0.0", port=8000, log_level="error")
 
 
-# Start backend once — guard against Streamlit's rerun
+# ── Start backend thread exactly once ────────────────────────────────────────
 if "backend_started" not in st.session_state:
     t = threading.Thread(target=_run_backend, daemon=True)
     t.start()
@@ -219,7 +229,6 @@ RED  = "#ff6b6b"
 GRN  = "#06d6a0"
 
 # ── page config ───────────────────────────────────────────────────────────────
-
 st.set_page_config(
     page_title="⚡ RL Thermal Manager",
     page_icon="⚡",
@@ -249,8 +258,7 @@ html,body,[class*="css"]{
 .stButton>button{
     background:linear-gradient(135deg,#1f6feb,#388bfd)!important;
     color:#fff!important;border:none!important;border-radius:6px!important;
-    font-family:'JetBrains Mono',monospace!important;font-weight:600!important;
-    padding:.45rem 1.2rem;
+    font-weight:600!important;padding:.45rem 1.2rem;
 }
 [data-testid="stSidebar"]{
     background:#161b22!important;border-right:1px solid #21262d!important;
@@ -264,7 +272,6 @@ hr{border-color:#21262d!important;}
 """, unsafe_allow_html=True)
 
 # ── session state defaults ────────────────────────────────────────────────────
-
 for _k, _v in dict(
     cpu_hist=[], bat_hist=[], rew_hist=[], act_hist=[], steps=[],
     total_reward=0.0, cur_cpu=None, cur_bat=None, initialized=False,
@@ -310,9 +317,9 @@ def _log(msg):
 
 
 def _explain(action, before, after) -> str:
-    data, err = _post("/explain", {"action": action,
-                                    "state_before": before,
-                                    "state_after": after})
+    data, err = _post("/explain", {
+        "action": action, "state_before": before, "state_after": after,
+    })
     if err:
         return f"⚠ Explain error: {err}"
     return (
@@ -335,27 +342,25 @@ def _cpu_plot():
     acts  = st.session_state.act_hist
 
     if steps:
-        ax.plot(steps, cpus, color=RED, lw=2, label="CPU %", zorder=3)
+        ax.plot(steps, cpus, color=RED, lw=2, label="CPU %",     zorder=3)
         ax.plot(steps, bats, color=GRN, lw=2, ls="--", label="Battery %", zorder=3)
         ax.axhspan(80, 100, alpha=0.07, color=RED)
         ax.axhline(60, color=ACC, lw=0.8, ls=":", alpha=0.6)
         for s, c, a in zip(steps, cpus, acts):
-            ax.scatter(s, c, color=ACTION_COLORS.get(a, "#fff"),
-                       s=45, zorder=5, edgecolors="none")
-        ax.legend(facecolor="#161b22", edgecolor=GRID,
-                  labelcolor=TXT, fontsize=8, loc="upper right")
+            ax.scatter(s, c, color=ACTION_COLORS.get(a, "#fff"), s=45, zorder=5, edgecolors="none")
+        ax.legend(facecolor="#161b22", edgecolor=GRID, labelcolor=TXT, fontsize=8, loc="upper right")
         ax.set_xlim(max(0, len(steps) - 25), max(1, len(steps)))
     else:
         ax.text(.5, .5, "No data yet — reset and run a step",
-                ha="center", va="center", color=TXT, fontsize=9,
-                transform=ax.transAxes)
+                ha="center", va="center", color=TXT, fontsize=9, transform=ax.transAxes)
 
     ax.set_ylim(0, 105)
     ax.set_xlabel("Step", color=TXT, fontsize=9)
     ax.set_ylabel("%", color=TXT, fontsize=9)
     ax.set_title("CPU Stability & Battery Level", color=TXT, fontsize=11, pad=8)
     ax.tick_params(colors=TXT, labelsize=8)
-    for sp in ax.spines.values(): sp.set_edgecolor(GRID)
+    for sp in ax.spines.values():
+        sp.set_edgecolor(GRID)
     ax.yaxis.grid(True, color=GRID, lw=0.5)
     ax.set_axisbelow(True)
     fig.tight_layout(pad=0.8)
@@ -369,8 +374,7 @@ def _reward_plot():
     rews  = st.session_state.rew_hist
 
     if steps:
-        cols = ["#06d6a0" if r >= .6 else ("#ffd166" if r >= .3 else "#ff6b6b")
-                for r in rews]
+        cols = ["#06d6a0" if r >= .6 else ("#ffd166" if r >= .3 else "#ff6b6b") for r in rews]
         ax.bar(steps, rews, color=cols, width=0.7, zorder=3)
         cum = np.cumsum(rews)
         ax2 = ax.twinx()
@@ -378,33 +382,34 @@ def _reward_plot():
         ax2.set_ylabel("Cumulative", color=ACC, fontsize=8)
         ax2.tick_params(colors=ACC, labelsize=7)
         ax2.set_facecolor(DARK)
-        for sp in ax2.spines.values(): sp.set_edgecolor(GRID)
+        for sp in ax2.spines.values():
+            sp.set_edgecolor(GRID)
         ax.set_xlim(max(0, len(steps) - 25), max(1, len(steps)))
     else:
         ax.text(.5, .5, "No reward data yet",
-                ha="center", va="center", color=TXT, fontsize=9,
-                transform=ax.transAxes)
+                ha="center", va="center", color=TXT, fontsize=9, transform=ax.transAxes)
 
     ax.set_ylim(0, 1.1)
     ax.set_xlabel("Step", color=TXT, fontsize=9)
     ax.set_ylabel("Reward (norm.)", color=TXT, fontsize=9)
     ax.set_title("Reward Gradient", color=TXT, fontsize=11, pad=8)
     ax.tick_params(colors=TXT, labelsize=8)
-    for sp in ax.spines.values(): sp.set_edgecolor(GRID)
+    for sp in ax.spines.values():
+        sp.set_edgecolor(GRID)
     ax.yaxis.grid(True, color=GRID, lw=0.5, alpha=0.5)
     ax.set_axisbelow(True)
     fig.tight_layout(pad=0.8)
     return fig
 
-# ── autopilot ─────────────────────────────────────────────────────────────────
+# ── autopilot helper ──────────────────────────────────────────────────────────
 
 def _autopilot_action(obs: dict):
     if random.random() < 0.5:
         cpu, bat = obs["cpu"], obs["battery"]
-        if cpu > 85:   act = "close_apps"
-        elif bat < 25: act = "throttle_gpu"
-        elif cpu > 70: act = "optimize_cpu"
-        else:          act = "hibernate_idle"
+        if cpu > 85:    act = "close_apps"
+        elif bat < 25:  act = "throttle_gpu"
+        elif cpu > 70:  act = "optimize_cpu"
+        else:           act = "hibernate_idle"
         return act, "RL"
     w = [0.25, 0.35 if obs["cpu"] > 80 else 0.15, 0.20, 0.20]
     return random.choices(ACTIONS, weights=w, k=1)[0], "LLM"
@@ -420,8 +425,10 @@ with st.sidebar:
                              value="Thermal spike after GPU benchmark", height=80)
 
     if st.button("🔄 Reset Environment", use_container_width=True):
-        data, err = _post("/reset", {"cpu": cpu_init, "battery": bat_init,
-                                      "incident_description": incident})
+        data, err = _post("/reset", {
+            "cpu": cpu_init, "battery": bat_init,
+            "incident_description": incident,
+        })
         if err:
             st.error(f"Reset failed: {err}")
         else:
@@ -460,10 +467,11 @@ with st.sidebar:
                     st.session_state.cur_cpu   = o["cpu"]
                     st.session_state.cur_bat   = o["battery"]
                     st.session_state.rationale = _explain(action_sel, obs_before, o)
-                    tag = " 🎯 Goal reached!" if rd["done"] else ""
+                    tag = " 🎯 Goal!" if rd["done"] else ""
                     st.session_state.status = (
                         f"[manual] step={step_no}  {action_sel}  "
-                        f"reward={rd['reward']:.4f}{tag}")
+                        f"reward={rd['reward']:.4f}{tag}"
+                    )
                     _log(f"STEP {step_no} {action_sel} r={rd['reward']:.4f} "
                          f"cpu={o['cpu']} bat={o['battery']}")
                     st.rerun()
@@ -478,6 +486,7 @@ with st.sidebar:
 st.markdown("# ⚡ RL Thermal Manager — Live Debugger")
 st.markdown("**Hybrid RL + LLM Decision Engine**  ·  Real-time State Machine Inspector")
 st.markdown("---")
+
 st.info(st.session_state.status)
 
 c1, c2, c3, c4 = st.columns(4)
@@ -496,7 +505,7 @@ st.markdown("---")
 st.markdown("### 📈 Live Graphs")
 gc1, gc2 = st.columns(2)
 with gc1:
-    st.pyplot(_cpu_plot(), use_container_width=True)
+    st.pyplot(_cpu_plot(),    use_container_width=True)
 with gc2:
     st.pyplot(_reward_plot(), use_container_width=True)
 
@@ -540,16 +549,21 @@ if run_auto:
             st.session_state.status = (
                 f"[{src}] step={sno}  {act}  "
                 f"reward={rd['reward']:.4f}  "
-                f"cpu={o['cpu']:.1f}%  bat={o['battery']:.1f}%{tag}")
+                f"cpu={o['cpu']:.1f}%  bat={o['battery']:.1f}%{tag}"
+            )
             _log(f"AUTO {sno} [{src}] {act} r={rd['reward']:.4f} "
                  f"cpu={o['cpu']} bat={o['battery']}")
-            bar.info(f"🚀 Step {i+1}/{n_steps} — `{act}` [{src}]  "
-                     f"reward={rd['reward']:.4f}{tag}")
+            bar.info(f"🚀 Step {i+1}/{n_steps} — `{act}` [{src}]  reward={rd['reward']:.4f}{tag}")
             time.sleep(INTERVAL)
             if rd["done"]:
-                bar.success(f"🎯 Goal in {sno} steps!  "
-                            f"Total reward={st.session_state.total_reward:.4f}")
+                bar.success(
+                    f"🎯 Goal reached in {sno} steps!  "
+                    f"Total reward = {st.session_state.total_reward:.4f}"
+                )
                 break
         else:
-            bar.success(f"✅ Done. Total reward={st.session_state.total_reward:.4f}")
+            bar.success(
+                f"✅ Autopilot finished {n_steps} steps.  "
+                f"Total reward = {st.session_state.total_reward:.4f}"
+            )
         st.rerun()
