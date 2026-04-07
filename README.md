@@ -4,10 +4,10 @@ emoji: ⚡
 colorFrom: blue
 colorTo: indigo
 sdk: streamlit
-sdk_version: 1.32.2
+sdk_version: 1.40.0
 app_file: app.py
 pinned: false
+python_version: "3.11"
 ---
 
 # ⚡ RL-LLM Hybrid Thermal Manager
-A Hybrid RL + LLM thermal management system with a live debugger dashboard.
