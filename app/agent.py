@@ -64,7 +64,7 @@ class QLearningAgent:
         self,
         alpha: float = 0.12,
         gamma: float = 0.92,
-        epsilon: float = 0.35,
+        epsilon: float = 0.2,
         epsilon_min: float = 0.05,
         epsilon_decay: float = 0.995,
     ):
@@ -108,8 +108,17 @@ class QLearningAgent:
         qvals = [self.q[s][a] for a in ACTIONS]
         probs = _softmax(qvals, temperature=1.0)
         conf = {a: float(p) for a, p in zip(ACTIONS, probs)}
-        action = max(conf, key=conf.get)
-        return action, conf
+
+        # Epsilon-greedy exploration (critical for action diversity in autopilot)
+        self.visits[s] = self.visits.get(s, 0) + 1
+        if self.epsilon > self.epsilon_min:
+            self.epsilon *= self.epsilon_decay
+
+        if random.random() < self.epsilon:
+            return random.choice(ACTIONS), conf
+
+        best_action = max(self.q[s], key=self.q[s].get)
+        return best_action, conf
 
     def update(
         self,
@@ -127,7 +136,8 @@ class QLearningAgent:
         self._ensure_state(s)
         self._ensure_state(ns)
 
-        r = float(max(0.0, min(1.0, reward)))
+        # Rewards can be negative with the updated env; keep learning stable by clipping.
+        r = float(max(-5.0, min(5.0, reward)))
         cur = self.q[s][action]
         nxt = 0.0 if done else max(self.q[ns].values())
         target = r + self.gamma * nxt
