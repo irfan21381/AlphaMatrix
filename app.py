@@ -11,6 +11,11 @@ import random
 import threading
 from typing import Optional, List
 
+from fastapi import FastAPI
+from fastapi.responses import JSONResponse
+
+app = FastAPI()
+
 import numpy as np
 import matplotlib
 matplotlib.use("Agg")
@@ -113,8 +118,8 @@ class ExplainSchema(BaseModel):
     state_after:  dict
 
 
-api = FastAPI(title="RL Thermal Manager")
-api.add_middleware(
+app = FastAPI(title="RL Thermal Manager")
+app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"], allow_methods=["*"], allow_headers=["*"],
 )
