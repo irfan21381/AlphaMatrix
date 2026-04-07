@@ -1,30 +1,13 @@
 import sys
 import os
-import json
-import random
 from typing import List
 
 from app.agent import QLearningAgent
+from app.env import ACTIONS, ThermalEnv, TASK
 
-try:
-    import requests
-except ImportError:
-    requests = None
-
-try:
-    from openai import OpenAI
-    _openai_available = True
-except ImportError:
-    _openai_available = False
-
-
-BACKEND_URL    = os.getenv("BACKEND_URL", "http://127.0.0.1:8000")
-MODEL_NAME     = os.getenv("MODEL_NAME", "hybrid-agent")
-API_KEY        = os.getenv("HF_TOKEN") or os.getenv("OPENAI_API_KEY")
-
-TASK           = os.getenv("ALPHAMATRIX_TASK", "thermal_throttling")
-BENCHMARK      = "alphamatrix"
-MAX_STEPS      = int(os.getenv("MAX_STEPS", "20"))
+MODEL_NAME = os.getenv("MODEL_NAME", "qlearning-agent")
+BENCHMARK = "alphamatrix"
+MAX_STEPS = int(os.getenv("MAX_STEPS", "20"))
 
 # TASK_ACTIONS = {
 #     "thermal_throttling": [
@@ -35,14 +18,7 @@ MAX_STEPS      = int(os.getenv("MAX_STEPS", "20"))
 #     ]
 # }
 
-TASK_ACTIONS = {
-    "thermal_throttling": [
-        "optimize_cpu",
-        "close_apps",
-        "throttle_gpu",
-        "hibernate_idle",
-    ]
-}
+TASK_ACTIONS = {TASK: list(ACTIONS)}
 
 
 # ── LOGGING (STRICT FORMAT) ─────────────────────────
@@ -59,35 +35,10 @@ def log_end(success, steps, score, rewards: List[float]):
     print(f"[END] success={str(success).lower()} steps={steps} score={score:.2f} rewards={rewards_str}", flush=True)
 
 
-# ── BACKEND ─────────────────────────────────────────
-
-def _backend_reset():
-    try:
-        r = requests.post(f"{BACKEND_URL}/reset", json={}, timeout=5)
-        return r.json()
-    except:
-        return None
-
-def _backend_step(action):
-    try:
-        r = requests.post(f"{BACKEND_URL}/step", json={"action": action}, timeout=5)
-        return r.json()
-    except:
-        return None
-
-
-# ── LLM ─────────────────────────────────────────────
-
-def _llm_action(client, obs, actions):
-    try:
-        resp = client.chat.completions.create(
-            model=MODEL_NAME,
-            messages=[{"role": "user", "content": str(obs)}],
-            max_tokens=20,
-        )
-        return random.choice(actions), 0.5
-    except:
-        return random.choice(actions), 0.5
+def _env_rollout():
+    env = ThermalEnv()
+    obs = env.reset(cpu=90.0, battery=20.0)
+    return env, obs
 
 
 # ── MAIN ───────────────────────────────────────────
@@ -95,8 +46,7 @@ def _llm_action(client, obs, actions):
 def run():
     actions = TASK_ACTIONS[TASK]
     agent = QLearningAgent()
-
-    client = OpenAI(base_url=os.getenv("API_BASE_URL"), api_key=API_KEY) if _openai_available and API_KEY else None
+    env, obs = _env_rollout()
 
     rewards = []
     total = 0.0
@@ -104,37 +54,13 @@ def run():
 
     log_start()
 
-    reset_data = _backend_reset()
-    if reset_data is None:
-        log_end(False, 0, 0.0, [])
-        return
-
-    obs = reset_data.get("observation", {})
-
     for step in range(1, MAX_STEPS + 1):
 
-        # hybrid decision
-        rl_probs = agent.get_q_confidence(obs)
-
-        if client:
-            llm_action, llm_conf = _llm_action(client, obs, actions)
-        else:
-            llm_action, llm_conf = random.choice(actions), 0.5
-
-        scores = {}
-        for a in actions:
-            scores[a] = 0.7 * rl_probs.get(a, 0) + 0.3 * (llm_conf if a == llm_action else 0)
-
-        action = max(scores, key=scores.get)
-
-        step_data = _backend_step(action)
-        if step_data is None:
-            log_step(step, action, 0.0, False, "backend_error")
-            break
-
-        next_obs = step_data.get("observation", {})
-        reward = float(step_data.get("reward", 0.0))
-        done = step_data.get("done", False)
+        action = agent.act(obs)
+        res = env.step(action)
+        next_obs = res.observation
+        reward = float(res.reward)
+        done = bool(res.done)
 
         rewards.append(reward)
         total += reward
