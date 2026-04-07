@@ -11,10 +11,10 @@ import random
 import threading
 from typing import Optional, List
 
-from fastapi import FastAPI
+
 from fastapi.responses import JSONResponse
 
-app = FastAPI()
+
 
 import numpy as np
 import matplotlib
@@ -125,12 +125,12 @@ app.add_middleware(
 )
 
 
-@api.get("/health")
+@app.get("/health")
 def health():
     return {"status": "ok"}
 
 
-@api.post("/reset")
+@app.post("/reset")
 def api_reset(init: Optional[InitSchema] = None):
     global _episode_step, _total_reward, _history, _initialized, _init_params
     p = init or InitSchema()
@@ -147,7 +147,7 @@ def api_reset(init: Optional[InitSchema] = None):
     return {"status": "reset", "observation": obs, "init_params": _init_params}
 
 
-@api.post("/step")
+@app.post("/step")
 def api_step(body: StepSchema):
     global _episode_step, _total_reward, _history
     if not _initialized:
@@ -171,7 +171,7 @@ def api_step(body: StepSchema):
 
 
 
-@api.get("/state")
+@app.get("/state")
 def api_state():
     if not _initialized:
         raise HTTPException(400, "Call /reset first.")
@@ -185,7 +185,7 @@ def api_state():
         }
 
 
-@api.post("/explain")
+@app.post("/explain")
 def api_explain(body: ExplainSchema):
     s0, s1 = body.state_before, body.state_after
     dc  = s0.get("cpu", 0) - s1.get("cpu", 0)
