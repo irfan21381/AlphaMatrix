@@ -1,118 +1,99 @@
 """
-app/main.py — Strict State Machine Backend (OpenEnv-Compliant)
-FastAPI-based REST backend with thread-safe state management.
+app/main.py — AlphaMatrix FastAPI Backend
+Thread-safe state machine. Runs on port 8000.
+All endpoints return OpenEnv-compliant JSON.
 """
+
+import threading
+from typing import Optional
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
-from typing import Optional
-import threading
-import time
 
-from app.env import DisasterEnv
+from app.env import AlphaMatrixEnv, TASKS, ACTIONS
 
-# ─── Schemas ──────────────────────────────────────────────────────────────────
+# ── Schemas ───────────────────────────────────────────────────────────────────
 
-class InitSchema(BaseModel):
-    cpu: float = Field(default=85.0, ge=0.0, le=100.0, description="Starting CPU usage %")
-    battery: float = Field(default=30.0, ge=0.0, le=100.0, description="Starting battery level %")
-    incident_description: Optional[str] = Field(
-        default="System under high load", description="Text description of the incident"
-    )
+class ResetSchema(BaseModel):
+    task: str = Field(default="thermal_throttling",
+                      description=f"One of: {TASKS}")
 
 class StepSchema(BaseModel):
-    action: str = Field(..., description="Action to apply: optimize_cpu | close_apps | throttle_gpu | hibernate_idle")
+    action: str
 
 class ExplainSchema(BaseModel):
-    action: str
+    task:        str
+    action:      str
     state_before: dict
-    state_after: dict
+    state_after:  dict
 
-# ─── App & State ──────────────────────────────────────────────────────────────
+# ── Shared state ──────────────────────────────────────────────────────────────
 
-app = FastAPI(title="RL Thermal Manager API", version="1.0.0")
+_lock          = threading.Lock()
+_env           = AlphaMatrixEnv()
+_step_count    = 0
+_total_reward  = 0.0
+_history: list = []
+_initialized   = False
+_current_task  = "thermal_throttling"
 
+# ── App ───────────────────────────────────────────────────────────────────────
+
+app = FastAPI(title="AlphaMatrix OpenEnv API", version="1.0.0")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=["*"], allow_methods=["*"], allow_headers=["*"],
 )
 
-# Shared mutable state — protected by a lock
-_lock = threading.Lock()
-_env: DisasterEnv = DisasterEnv()
-_episode_step: int = 0
-_total_reward: float = 0.0
-_history: list = []          # list of step dicts
-_initialized: bool = False
-_init_params: dict = {}
-
-# ─── Endpoints ────────────────────────────────────────────────────────────────
+# ── Endpoints ─────────────────────────────────────────────────────────────────
 
 @app.get("/health")
 def health():
-    """Liveness probe."""
-    return {"status": "ok", "timestamp": time.time()}
+    return {"status": "ok"}
+
+
+@app.get("/tasks")
+def list_tasks():
+    return {"tasks": TASKS, "actions": ACTIONS}
 
 
 @app.post("/reset")
-def reset(init: Optional[InitSchema] = None):
-    """
-    Reset the environment to a (possibly user-defined) initial disaster state.
-    Accepts an optional InitSchema to configure starting conditions.
-    """
-    global _episode_step, _total_reward, _history, _initialized, _init_params
-
-    params = init or InitSchema()
+def reset(body: Optional[ResetSchema] = None):
+    global _step_count, _total_reward, _history, _initialized, _current_task
+    task = (body.task if body else "thermal_throttling")
+    if task not in TASKS:
+        raise HTTPException(400, f"Unknown task '{task}'. Valid: {TASKS}")
 
     with _lock:
-        obs = _env.reset(
-            cpu=params.cpu,
-            battery=params.battery,
-        )
-        _episode_step = 0
+        obs           = _env.reset(task=task)
+        _step_count   = 0
         _total_reward = 0.0
-        _history = []
-        _initialized = True
-        _init_params = {
-            "cpu": params.cpu,
-            "battery": params.battery,
-            "incident_description": params.incident_description,
-        }
+        _history      = []
+        _initialized  = True
+        _current_task = task
 
-    return {
-        "status": "reset",
-        "observation": obs,
-        "init_params": _init_params,
-    }
+    return {"status": "reset", "task": task, "observation": obs}
 
 
 @app.post("/step")
 def step(body: StepSchema):
-    """
-    Advance the environment by one step using the given action.
-    Returns the new observation, reward, done flag, and info.
-    """
-    global _episode_step, _total_reward, _history, _initialized
-
+    global _step_count, _total_reward, _history
     if not _initialized:
-        raise HTTPException(status_code=400, detail="Environment not initialized. Call /reset first.")
+        raise HTTPException(400, "Call /reset first.")
 
     with _lock:
-        obs, reward, done, info = _env.step(body.action)
-        _episode_step += 1
-        _total_reward += reward
-
+        result        = _env.step(body.action)   # OpenEnv dict
+        _step_count  += 1
+        _total_reward += result["reward"]
         record = {
-            "step": _episode_step,
-            "action": body.action,
-            "observation": obs,
-            "reward": round(reward, 4),
-            "cumulative_reward": round(_total_reward, 4),
-            "done": done,
-            "info": info,
+            "step":              _step_count,
+            "action":            body.action,
+            "observation":       result["observation"],
+            "reward":            result["reward"],
+            "cumulative_reward": round(_total_reward, 6),
+            "done":              result["done"],
+            "info":              result["info"],
         }
         _history.append(record)
 
@@ -120,76 +101,50 @@ def step(body: StepSchema):
 
 
 @app.get("/state")
-def get_state():
-    """Return the current internal state without advancing it."""
+def state():
     if not _initialized:
-        raise HTTPException(status_code=400, detail="Environment not initialized. Call /reset first.")
-
+        raise HTTPException(400, "Call /reset first.")
     with _lock:
-        obs = _env.get_observation()
         return {
-            "observation": obs,
-            "step": _episode_step,
-            "total_reward": round(_total_reward, 4),
-            "done": _env.is_done(),
-            "init_params": _init_params,
+            "task":         _current_task,
+            "observation":  _env.get_observation(),
+            "step":         _step_count,
+            "total_reward": round(_total_reward, 6),
+            "done":         _env.is_done(),
+            "actions":      ACTIONS[_current_task],
         }
 
 
 @app.get("/history")
-def get_history():
-    """Return the full episode history of steps."""
+def history():
     with _lock:
         return {
-            "episode_step": _episode_step,
-            "total_reward": round(_total_reward, 4),
-            "history": list(_history),
+            "task":         _current_task,
+            "step_count":   _step_count,
+            "total_reward": round(_total_reward, 6),
+            "history":      list(_history),
         }
-
-
-@app.get("/actions")
-def get_actions():
-    """Return the list of valid actions."""
-    return {"actions": list(_env.action_space)}
 
 
 @app.post("/explain")
 def explain(body: ExplainSchema):
-    """
-    Return a plain-language rationale for why a given action was chosen
-    based on before/after state delta.
-    """
-    s0 = body.state_before
-    s1 = body.state_after
-    action = body.action
+    s0, s1 = body.state_before, body.state_after
 
-    delta_cpu = s0.get("cpu", 0) - s1.get("cpu", 0)
-    delta_bat = s1.get("battery", 0) - s0.get("battery", 0)
-
-    rationale_map = {
-        "optimize_cpu": f"CPU scheduler was rebalanced. CPU dropped by {delta_cpu:.1f}%. "
-                        "This action is most effective when CPU > 80%.",
-        "close_apps":   f"Background applications were terminated. CPU reduced by {delta_cpu:.1f}%. "
-                        "Side-effect: slight battery recovery of {delta_bat:.1f}%.",
-        "throttle_gpu": f"GPU clock rate was throttled. Thermal load decreased, CPU relief: {delta_cpu:.1f}%. "
-                        "Battery improved by {delta_bat:.1f}%.",
-        "hibernate_idle": f"Idle processes were hibernated. CPU freed: {delta_cpu:.1f}%. "
-                          "Battery conserved: {delta_bat:.1f}%.",
+    # Compute deltas for any numeric key present in both states
+    deltas = {
+        k: round(s0[k] - s1.get(k, s0[k]), 3)
+        for k in s0 if isinstance(s0[k], (int, float))
     }
+    improved_keys = [k for k, d in deltas.items() if d > 0]
 
-    rationale = rationale_map.get(
-        action,
-        f"Action '{action}' applied. CPU Δ={delta_cpu:.1f}%, Battery Δ={delta_bat:.1f}%."
+    rationale = (
+        f"Action `{body.action}` on task `{body.task}`. "
+        f"Improvements: {improved_keys if improved_keys else 'none this step'}. "
+        f"Deltas: {deltas}."
     )
-
-    severity = "CRITICAL" if s0.get("cpu", 0) > 90 else ("HIGH" if s0.get("cpu", 0) > 75 else "MODERATE")
-
     return {
-        "action": action,
+        "task":      body.task,
+        "action":    body.action,
         "rationale": rationale,
-        "severity_at_decision": severity,
-        "delta": {
-            "cpu": round(delta_cpu, 2),
-            "battery": round(delta_bat, 2),
-        },
+        "deltas":    deltas,
     }
