@@ -1,20 +1,14 @@
 """
 app.py — RL-LLM Thermal Manager for HuggingFace Spaces
-- FastAPI backend  →  background daemon thread on port 8000
-- Streamlit frontend  →  main thread on port 7860 (HF required)
-
-Upload ONLY:  app.py  |  requirements.txt  |  README.md
-Space settings:  SDK = streamlit  |  App file = app.py
+Python 3.13 compatible. FastAPI in daemon thread + Streamlit on port 7860.
 """
 
-# ── stdlib ────────────────────────────────────────────────────────────────────
 import os
 import time
 import random
 import threading
 from typing import Optional, List
 
-# ── third-party ───────────────────────────────────────────────────────────────
 import numpy as np
 import matplotlib
 matplotlib.use("Agg")
@@ -38,7 +32,7 @@ ACTIONS: List[str] = [
 ]
 CPU_SAFE    = 60.0
 BAT_SAFE    = 50.0
-MAX_IMPROVE = 30.0   # 20 (cpu) + 10 (battery)
+MAX_IMPROVE = 30.0
 
 
 class DisasterEnv:
@@ -61,7 +55,7 @@ class DisasterEnv:
             dc, db = random.uniform(10, 20), random.uniform(1, 5)
         elif action == "throttle_gpu":
             dc, db = random.uniform(5, 12),  random.uniform(3, 8)
-        else:  # hibernate_idle
+        else:
             dc, db = random.uniform(3, 10),  random.uniform(5, 10)
         self._cpu = max(0.0, min(100.0, self._cpu - dc))
         self._bat = max(0.0, min(100.0, self._bat + db))
@@ -69,7 +63,8 @@ class DisasterEnv:
         reward = round(min(1.0, (max(0, c0 - self._cpu) + max(0, self._bat - b0)) / MAX_IMPROVE), 4)
         done   = (self._cpu <= CPU_SAFE and self._bat >= BAT_SAFE) or self._step >= 50
         info   = {"delta_cpu": round(c0 - self._cpu, 3),
-                  "delta_bat": round(self._bat - b0, 3), "step": self._step}
+                  "delta_bat": round(self._bat - b0, 3),
+                  "step": self._step}
         return self._obs(), reward, done, info
 
     def _obs(self):
@@ -83,14 +78,13 @@ class DisasterEnv:
 #  PART 2 — FASTAPI BACKEND  (daemon thread, port 8000)
 # ═══════════════════════════════════════════════════════════════════════════════
 
-# shared mutable state
 _lock          = threading.Lock()
 _env           = DisasterEnv()
 _episode_step  = 0
 _total_reward  = 0.0
 _history: list = []
 _initialized   = False
-_init_params   = {}
+_init_params: dict = {}
 
 
 class InitSchema(BaseModel):
@@ -168,7 +162,6 @@ def api_state():
             "step":         _episode_step,
             "total_reward": round(_total_reward, 4),
             "done":         _env.is_done(),
-            "init_params":  _init_params,
         }
 
 
@@ -186,24 +179,23 @@ def api_explain(body: ExplainSchema):
     sev = ("CRITICAL" if s0.get("cpu", 0) > 90
            else "HIGH" if s0.get("cpu", 0) > 75 else "MODERATE")
     return {
-        "action":                body.action,
-        "rationale":             msgs.get(body.action, f"Applied {body.action}."),
-        "severity_at_decision":  sev,
-        "delta":                 {"cpu": round(dc, 2), "battery": round(db, 2)},
+        "action":               body.action,
+        "rationale":            msgs.get(body.action, f"Applied {body.action}."),
+        "severity_at_decision": sev,
+        "delta":                {"cpu": round(dc, 2), "battery": round(db, 2)},
     }
 
 
 def _run_backend():
-    """Run FastAPI in a daemon thread so it doesn't block Streamlit."""
     uvicorn.run(api, host="0.0.0.0", port=8000, log_level="error")
 
 
-# Start backend exactly once (Streamlit reruns the script on every interaction)
+# Start backend once — guard against Streamlit's rerun
 if "backend_started" not in st.session_state:
     t = threading.Thread(target=_run_backend, daemon=True)
     t.start()
     st.session_state["backend_started"] = True
-    time.sleep(1.2)   # wait for uvicorn to bind
+    time.sleep(1.5)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -219,12 +211,12 @@ ACTION_COLORS = {
     "throttle_gpu":   "#ffd166",
     "hibernate_idle": "#06d6a0",
 }
-DARK  = "#0d1117"
-GRID  = "#21262d"
-TXT   = "#c9d1d9"
-ACC   = "#58a6ff"
-RED   = "#ff6b6b"
-GRN   = "#06d6a0"
+DARK = "#0d1117"
+GRID = "#21262d"
+TXT  = "#c9d1d9"
+ACC  = "#58a6ff"
+RED  = "#ff6b6b"
+GRN  = "#06d6a0"
 
 # ── page config ───────────────────────────────────────────────────────────────
 
@@ -240,33 +232,32 @@ st.markdown("""
 @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&display=swap');
 html,body,[class*="css"]{
     font-family:'JetBrains Mono',monospace!important;
-    background:#0d1117!important; color:#c9d1d9!important;
+    background:#0d1117!important;color:#c9d1d9!important;
 }
 .stApp{background:#0d1117!important;}
 [data-testid="metric-container"]{
-    background:#161b22; border:1px solid #30363d;
-    border-radius:8px; padding:12px;
+    background:#161b22;border:1px solid #30363d;
+    border-radius:8px;padding:12px;
 }
 [data-testid="metric-container"] label{
-    color:#8b949e!important; font-size:11px!important;
-    text-transform:uppercase; letter-spacing:.08em;
+    color:#8b949e!important;font-size:11px!important;
+    text-transform:uppercase;letter-spacing:.08em;
 }
 [data-testid="metric-container"] [data-testid="stMetricValue"]{
-    color:#58a6ff!important; font-size:22px!important; font-weight:700!important;
+    color:#58a6ff!important;font-size:22px!important;font-weight:700!important;
 }
 .stButton>button{
     background:linear-gradient(135deg,#1f6feb,#388bfd)!important;
-    color:#fff!important; border:none!important; border-radius:6px!important;
-    font-family:'JetBrains Mono',monospace!important; font-weight:600!important;
+    color:#fff!important;border:none!important;border-radius:6px!important;
+    font-family:'JetBrains Mono',monospace!important;font-weight:600!important;
     padding:.45rem 1.2rem;
 }
 [data-testid="stSidebar"]{
-    background:#161b22!important; border-right:1px solid #21262d!important;
+    background:#161b22!important;border-right:1px solid #21262d!important;
 }
 .stTextArea textarea,.stTextInput input{
-    background:#161b22!important; color:#c9d1d9!important;
-    border:1px solid #30363d!important; border-radius:6px!important;
-    font-family:'JetBrains Mono',monospace!important;
+    background:#161b22!important;color:#c9d1d9!important;
+    border:1px solid #30363d!important;border-radius:6px!important;
 }
 hr{border-color:#21262d!important;}
 </style>
@@ -274,15 +265,12 @@ hr{border-color:#21262d!important;}
 
 # ── session state defaults ────────────────────────────────────────────────────
 
-_DEFAULTS = dict(
+for _k, _v in dict(
     cpu_hist=[], bat_hist=[], rew_hist=[], act_hist=[], steps=[],
-    total_reward=0.0, cur_cpu=None, cur_bat=None,
-    initialized=False,
+    total_reward=0.0, cur_cpu=None, cur_bat=None, initialized=False,
     rationale="_Reset the environment, then run a step to see AI rationale._",
-    status="Awaiting reset…",
-    log=[],
-)
-for _k, _v in _DEFAULTS.items():
+    status="Awaiting reset…", log=[],
+).items():
     if _k not in st.session_state:
         st.session_state[_k] = _v
 
@@ -326,7 +314,7 @@ def _explain(action, before, after) -> str:
                                     "state_before": before,
                                     "state_after": after})
     if err:
-        return f"⚠ Could not reach explain endpoint: {err}"
+        return f"⚠ Explain error: {err}"
     return (
         f"### 🤖 AI Rationale\n\n"
         f"**Action:** `{data['action']}`  \n"
@@ -347,7 +335,7 @@ def _cpu_plot():
     acts  = st.session_state.act_hist
 
     if steps:
-        ax.plot(steps, cpus, color=RED, lw=2, label="CPU %",     zorder=3)
+        ax.plot(steps, cpus, color=RED, lw=2, label="CPU %", zorder=3)
         ax.plot(steps, bats, color=GRN, lw=2, ls="--", label="Battery %", zorder=3)
         ax.axhspan(80, 100, alpha=0.07, color=RED)
         ax.axhline(60, color=ACC, lw=0.8, ls=":", alpha=0.6)
@@ -364,7 +352,7 @@ def _cpu_plot():
 
     ax.set_ylim(0, 105)
     ax.set_xlabel("Step", color=TXT, fontsize=9)
-    ax.set_ylabel("%",    color=TXT, fontsize=9)
+    ax.set_ylabel("%", color=TXT, fontsize=9)
     ax.set_title("CPU Stability & Battery Level", color=TXT, fontsize=11, pad=8)
     ax.tick_params(colors=TXT, labelsize=8)
     for sp in ax.spines.values(): sp.set_edgecolor(GRID)
@@ -398,7 +386,7 @@ def _reward_plot():
                 transform=ax.transAxes)
 
     ax.set_ylim(0, 1.1)
-    ax.set_xlabel("Step",           color=TXT, fontsize=9)
+    ax.set_xlabel("Step", color=TXT, fontsize=9)
     ax.set_ylabel("Reward (norm.)", color=TXT, fontsize=9)
     ax.set_title("Reward Gradient", color=TXT, fontsize=11, pad=8)
     ax.tick_params(colors=TXT, labelsize=8)
@@ -408,41 +396,36 @@ def _reward_plot():
     fig.tight_layout(pad=0.8)
     return fig
 
-# ── autopilot helper ──────────────────────────────────────────────────────────
+# ── autopilot ─────────────────────────────────────────────────────────────────
 
 def _autopilot_action(obs: dict):
-    if random.random() < 0.5:                  # RL branch
+    if random.random() < 0.5:
         cpu, bat = obs["cpu"], obs["battery"]
-        if cpu > 85:       act = "close_apps"
-        elif bat < 25:     act = "throttle_gpu"
-        elif cpu > 70:     act = "optimize_cpu"
-        else:              act = "hibernate_idle"
+        if cpu > 85:   act = "close_apps"
+        elif bat < 25: act = "throttle_gpu"
+        elif cpu > 70: act = "optimize_cpu"
+        else:          act = "hibernate_idle"
         return act, "RL"
-    else:                                       # LLM branch (simulated)
-        w = [0.25, 0.35 if obs["cpu"] > 80 else 0.15, 0.20, 0.20]
-        return random.choices(ACTIONS, weights=w, k=1)[0], "LLM"
+    w = [0.25, 0.35 if obs["cpu"] > 80 else 0.15, 0.20, 0.20]
+    return random.choices(ACTIONS, weights=w, k=1)[0], "LLM"
 
 # ── sidebar ───────────────────────────────────────────────────────────────────
 
 with st.sidebar:
     st.markdown("## ⚙ Configuration")
     st.markdown("---")
-
     cpu_init = st.slider("Starting CPU %",     0.0, 100.0, 90.0, 0.5)
     bat_init = st.slider("Starting Battery %", 0.0, 100.0, 20.0, 0.5)
     incident = st.text_area("Incident Description",
-                             value="Thermal spike after GPU benchmark",
-                             height=80)
+                             value="Thermal spike after GPU benchmark", height=80)
 
     if st.button("🔄 Reset Environment", use_container_width=True):
-        data, err = _post("/reset", {
-            "cpu": cpu_init, "battery": bat_init,
-            "incident_description": incident,
-        })
+        data, err = _post("/reset", {"cpu": cpu_init, "battery": bat_init,
+                                      "incident_description": incident})
         if err:
             st.error(f"Reset failed: {err}")
         else:
-            for k in ["cpu_hist", "bat_hist", "rew_hist", "act_hist", "steps", "log"]:
+            for k in ["cpu_hist","bat_hist","rew_hist","act_hist","steps","log"]:
                 st.session_state[k] = []
             st.session_state.total_reward = 0.0
             obs = data["observation"]
@@ -480,8 +463,7 @@ with st.sidebar:
                     tag = " 🎯 Goal reached!" if rd["done"] else ""
                     st.session_state.status = (
                         f"[manual] step={step_no}  {action_sel}  "
-                        f"reward={rd['reward']:.4f}{tag}"
-                    )
+                        f"reward={rd['reward']:.4f}{tag}")
                     _log(f"STEP {step_no} {action_sel} r={rd['reward']:.4f} "
                          f"cpu={o['cpu']} bat={o['battery']}")
                     st.rerun()
@@ -496,7 +478,6 @@ with st.sidebar:
 st.markdown("# ⚡ RL Thermal Manager — Live Debugger")
 st.markdown("**Hybrid RL + LLM Decision Engine**  ·  Real-time State Machine Inspector")
 st.markdown("---")
-
 st.info(st.session_state.status)
 
 c1, c2, c3, c4 = st.columns(4)
@@ -515,7 +496,7 @@ st.markdown("---")
 st.markdown("### 📈 Live Graphs")
 gc1, gc2 = st.columns(2)
 with gc1:
-    st.pyplot(_cpu_plot(),    use_container_width=True)
+    st.pyplot(_cpu_plot(), use_container_width=True)
 with gc2:
     st.pyplot(_reward_plot(), use_container_width=True)
 
@@ -559,24 +540,16 @@ if run_auto:
             st.session_state.status = (
                 f"[{src}] step={sno}  {act}  "
                 f"reward={rd['reward']:.4f}  "
-                f"cpu={o['cpu']:.1f}%  bat={o['battery']:.1f}%{tag}"
-            )
+                f"cpu={o['cpu']:.1f}%  bat={o['battery']:.1f}%{tag}")
             _log(f"AUTO {sno} [{src}] {act} r={rd['reward']:.4f} "
                  f"cpu={o['cpu']} bat={o['battery']}")
-            bar.info(
-                f"🚀 Step {i+1}/{n_steps} — `{act}` [{src}]  "
-                f"reward={rd['reward']:.4f}{tag}"
-            )
+            bar.info(f"🚀 Step {i+1}/{n_steps} — `{act}` [{src}]  "
+                     f"reward={rd['reward']:.4f}{tag}")
             time.sleep(INTERVAL)
             if rd["done"]:
-                bar.success(
-                    f"🎯 Goal reached in {sno} steps!  "
-                    f"Total reward = {st.session_state.total_reward:.4f}"
-                )
+                bar.success(f"🎯 Goal in {sno} steps!  "
+                            f"Total reward={st.session_state.total_reward:.4f}")
                 break
         else:
-            bar.success(
-                f"✅ Autopilot finished {n_steps} steps.  "
-                f"Total reward = {st.session_state.total_reward:.4f}"
-            )
+            bar.success(f"✅ Done. Total reward={st.session_state.total_reward:.4f}")
         st.rerun()
