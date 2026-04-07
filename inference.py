@@ -26,12 +26,21 @@ TASK           = os.getenv("ALPHAMATRIX_TASK", "thermal_throttling")
 BENCHMARK      = "alphamatrix"
 MAX_STEPS      = int(os.getenv("MAX_STEPS", "20"))
 
+# TASK_ACTIONS = {
+#     "thermal_throttling": [
+#         "reduce_clock_speed",
+#         "kill_heavy_process",
+#         "enable_cooling_fan",
+#         "throttle_gpu",
+#     ]
+# }
+
 TASK_ACTIONS = {
     "thermal_throttling": [
-        "reduce_clock_speed",
-        "kill_heavy_process",
-        "enable_cooling_fan",
+        "optimize_cpu",
+        "close_apps",
         "throttle_gpu",
+        "hibernate_idle",
     ]
 }
 
