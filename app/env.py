@@ -57,6 +57,19 @@ class ThermalEnv:
         self._step = 0
         return self.observation()
 
+    def reset_openenv(self, cpu: float = 90.0, battery: float = 20.0) -> Dict:
+        """
+        OpenEnv-compatible reset payload:
+        {
+          "observation": {...},
+          "reward": 0,
+          "done": false,
+          "info": {}
+        }
+        """
+        obs = self.reset(cpu=cpu, battery=battery)
+        return {"observation": obs, "reward": 0, "done": False, "info": {}}
+
     def observation(self) -> Dict[str, float]:
         return {"cpu": round(self._cpu, 3), "battery": round(self._battery, 3)}
 
@@ -124,6 +137,24 @@ class ThermalEnv:
         }
 
         return StepResult(observation=after, reward=round(float(reward), 6), done=done, info=info)
+
+    def step_openenv(self, action: str) -> Dict:
+        """
+        OpenEnv-style step payload:
+        {
+          "observation": {...},
+          "reward": <float>,
+          "done": <bool>,
+          "info": {...}
+        }
+        """
+        res = self.step(action)
+        return {
+            "observation": res.observation,
+            "reward": float(res.reward),
+            "done": bool(res.done),
+            "info": dict(res.info),
+        }
 
 
 def explain_action(action: str, state_before: Dict[str, float], state_after: Dict[str, float]) -> Tuple[str, Dict[str, float]]:
