@@ -14,6 +14,8 @@ from typing import Dict, Tuple
 TASK = "thermal_throttling"
 ACTIONS = ["optimize_cpu", "close_apps", "throttle_gpu", "hibernate_idle"]
 
+CPU_MIN = 5.0  # realistic lower bound (no 0.0)
+
 
 @dataclass
 class StepResult:
@@ -50,7 +52,7 @@ class ThermalEnv:
         self._step = 0
 
     def reset(self, cpu: float = 90.0, battery: float = 20.0) -> Dict[str, float]:
-        self._cpu = float(max(0.0, min(100.0, cpu)))
+        self._cpu = float(max(CPU_MIN, min(100.0, cpu)))
         self._battery = float(max(0.0, min(100.0, battery)))
         self._step = 0
         return self.observation()
@@ -59,10 +61,10 @@ class ThermalEnv:
         return {"cpu": round(self._cpu, 3), "battery": round(self._battery, 3)}
 
     def is_done(self) -> bool:
-        return (
-            (self._cpu <= self.cpu_safe and self._battery >= self.battery_safe)
-            or self._step >= self.max_steps
-        )
+        # Terminal conditions (per spec):
+        # - success if CPU < 20
+        # - or done if steps > max_steps (implemented as >= to stop at limit)
+        return (self._cpu < 20.0) or (self._step >= self.max_steps)
 
     def step(self, action: str) -> StepResult:
         if action not in ACTIONS:
@@ -71,9 +73,9 @@ class ThermalEnv:
         before = self.observation()
         cpu0, bat0 = self._cpu, self._battery
 
-        # Background drift: load + small battery drain each step
-        self._cpu = min(100.0, max(0.0, self._cpu + self._rng.uniform(-1.0, 2.5)))
-        self._battery = min(100.0, max(0.0, self._battery - self._rng.uniform(0.2, 1.2)))
+        # Background drift: varying load + battery drain each step
+        self._cpu = min(100.0, max(CPU_MIN, self._cpu + self._rng.uniform(-0.5, 3.5)))
+        self._battery = min(100.0, max(0.0, self._battery - self._rng.uniform(0.4, 1.6)))
 
         # Action effects (stochastic)
         if action == "optimize_cpu":
@@ -89,18 +91,27 @@ class ThermalEnv:
             self._cpu -= self._rng.uniform(3.0, 9.0)
             self._battery += self._rng.uniform(4.0, 10.0)
 
-        self._cpu = min(100.0, max(0.0, self._cpu))
+        # Clamp CPU to realistic range (never 0.0)
+        self._cpu = min(100.0, max(CPU_MIN, self._cpu))
         self._battery = min(100.0, max(0.0, self._battery))
         self._step += 1
 
         after = self.observation()
 
-        # Reward: encourage CPU down and battery up, scaled to 0..1
-        d_cpu = max(0.0, cpu0 - self._cpu)
-        d_bat = max(0.0, self._battery - bat0)
-        # Typical best-case ~ (20 cpu + 10 bat) in one step
-        raw = (d_cpu / 20.0) * 0.7 + (d_bat / 10.0) * 0.3
-        reward = float(max(0.0, min(1.0, raw)))
+        # Reward realism (can be positive or negative):
+        # + CPU reduction (good)
+        # + Battery preservation (good)
+        # - step/action penalty (too many actions is bad)
+        # - over-throttling penalty if CPU pushed too low
+        d_cpu = float(cpu0 - self._cpu)
+        d_bat = float(self._battery - bat0)
+
+        step_penalty = 0.1
+        over_throttle_penalty = 0.0
+        if self._cpu < 10.0:
+            over_throttle_penalty = (10.0 - self._cpu) * 0.2
+
+        reward = (d_cpu * 0.5) + (d_bat * 0.3) - step_penalty - over_throttle_penalty
 
         done = self.is_done()
         info = {
@@ -109,10 +120,10 @@ class ThermalEnv:
             "step": self._step,
             "delta_cpu": round(before["cpu"] - after["cpu"], 3),
             "delta_battery": round(after["battery"] - before["battery"], 3),
-            "goal": {"cpu_safe": self.cpu_safe, "battery_safe": self.battery_safe},
+            "goal": {"success_cpu_lt": 20.0, "max_steps": self.max_steps},
         }
 
-        return StepResult(observation=after, reward=round(reward, 6), done=done, info=info)
+        return StepResult(observation=after, reward=round(float(reward), 6), done=done, info=info)
 
 
 def explain_action(action: str, state_before: Dict[str, float], state_after: Dict[str, float]) -> Tuple[str, Dict[str, float]]:
