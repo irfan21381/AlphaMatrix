@@ -1,38 +1,38 @@
 """
-app/agent.py — Enhanced Q-Learning Agent (Hybrid Ready)
+app/agent.py — Lightweight Q-learning agent for the thermal task.
 
-Upgrades:
-✔ Softmax confidence output (for hybrid RL + LLM)
-✔ Adaptive epsilon decay
-✔ State visit tracking
-✔ Reward normalization
-✔ Auto-save improvements
-✔ Debug insights
+No external APIs. Uses a small discrete state space and a persistent Q-table.
 """
 
-import random
-import json
-import os
-import math
-from typing import Dict, List
+from __future__ import annotations
 
-ACTIONS = ["optimize_cpu", "close_apps", "throttle_gpu", "hibernate_idle"]
+import json
+import math
+import os
+import random
+from dataclasses import dataclass
+from typing import Dict, List, Tuple
+
+from app.env import ACTIONS
+
 QTABLE_PATH = os.path.join(os.path.dirname(__file__), "qtable.json")
 
 
 def _discretize(obs: Dict[str, float]) -> str:
-    cpu = obs.get("cpu", 50.0)
-    bat = obs.get("battery", 50.0)
+    cpu = float(obs.get("cpu", 50.0))
+    bat = float(obs.get("battery", 50.0))
 
+    # CPU buckets
     if cpu < 40:
         c = "L"
-    elif cpu < 70:
+    elif cpu < 60:
         c = "M"
-    elif cpu < 85:
+    elif cpu < 80:
         c = "H"
     else:
         c = "C"
 
+    # Battery buckets
     if bat < 20:
         b = "L"
     elif bat < 50:
@@ -43,68 +43,73 @@ def _discretize(obs: Dict[str, float]) -> str:
     return f"cpu_{c}_bat_{b}"
 
 
-class QLearningAgent:
-    def __init__(self, alpha: float = 0.1, gamma: float = 0.9, epsilon: float = 0.2):
-        self.alpha   = alpha
-        self.gamma   = gamma
-        self.epsilon = epsilon
+def _softmax(values: List[float], temperature: float = 1.0) -> List[float]:
+    t = max(1e-6, float(temperature))
+    m = max(values) if values else 0.0
+    exps = [math.exp((v - m) / t) for v in values]
+    s = sum(exps) or 1.0
+    return [e / s for e in exps]
 
-        self.epsilon_min = 0.05
-        self.epsilon_decay = 0.995
+
+@dataclass
+class AgentDebug:
+    state: str
+    q_values: Dict[str, float]
+    epsilon: float
+    visits: int
+
+
+class QLearningAgent:
+    def __init__(
+        self,
+        alpha: float = 0.12,
+        gamma: float = 0.92,
+        epsilon: float = 0.35,
+        epsilon_min: float = 0.05,
+        epsilon_decay: float = 0.995,
+    ):
+        self.alpha = float(alpha)
+        self.gamma = float(gamma)
+        self.epsilon = float(epsilon)
+        self.epsilon_min = float(epsilon_min)
+        self.epsilon_decay = float(epsilon_decay)
 
         self.q: Dict[str, Dict[str, float]] = {}
-        self.state_visits: Dict[str, int] = {}
-
+        self.visits: Dict[str, int] = {}
         self._load()
 
-    # ── Q-table helpers ───────────────────────────────────────────────────────
+    def _ensure_state(self, s: str) -> None:
+        if s not in self.q:
+            self.q[s] = {a: 0.0 for a in ACTIONS}
 
-    def _get_q(self, state: str, action: str) -> float:
-        return self.q.get(state, {}).get(action, 0.0)
+    def get_q(self, obs: Dict[str, float]) -> Dict[str, float]:
+        s = _discretize(obs)
+        self._ensure_state(s)
+        return dict(self.q[s])
 
-    def _set_q(self, state: str, action: str, value: float):
-        if state not in self.q:
-            self.q[state] = {a: 0.0 for a in ACTIONS}
-        self.q[state][action] = value
+    def act(self, obs: Dict[str, float]) -> str:
+        s = _discretize(obs)
+        self._ensure_state(s)
 
-    # ── Softmax (for hybrid confidence) ───────────────────────────────────────
-
-    def _softmax(self, values: List[float]) -> List[float]:
-        exp_vals = [math.exp(v) for v in values]
-        total = sum(exp_vals)
-        return [v / total for v in exp_vals]
-
-    def get_action_with_confidence(self, obs: Dict[str, float]):
-        """
-        Returns:
-        action, confidence distribution
-        """
-        state = _discretize(obs)
-        q_vals = [self._get_q(state, a) for a in ACTIONS]
-        probs = self._softmax(q_vals)
-
-        best_idx = probs.index(max(probs))
-        return ACTIONS[best_idx], probs
-
-    # ── Policy ────────────────────────────────────────────────────────────────
-
-    def get_action(self, obs: Dict[str, float]) -> str:
-        state = _discretize(obs)
-
-        # Track visits
-        self.state_visits[state] = self.state_visits.get(state, 0) + 1
-
-        # Adaptive epsilon (less exploration over time)
+        self.visits[s] = self.visits.get(s, 0) + 1
         if self.epsilon > self.epsilon_min:
             self.epsilon *= self.epsilon_decay
 
         if random.random() < self.epsilon:
             return random.choice(ACTIONS)
 
-        q_vals = {a: self._get_q(state, a) for a in ACTIONS}
-        return max(q_vals, key=q_vals.get)
+        qvals = self.q[s]
+        best = max(qvals, key=qvals.get)
+        return best
 
-    # ── Learning ──────────────────────────────────────────────────────────────
+    def act_with_confidence(self, obs: Dict[str, float]) -> Tuple[str, Dict[str, float]]:
+        s = _discretize(obs)
+        self._ensure_state(s)
+        qvals = [self.q[s][a] for a in ACTIONS]
+        probs = _softmax(qvals, temperature=1.0)
+        conf = {a: float(p) for a, p in zip(ACTIONS, probs)}
+        action = max(conf, key=conf.get)
+        return action, conf
 
     def update(
         self,
@@ -113,62 +118,45 @@ class QLearningAgent:
         reward: float,
         next_obs: Dict[str, float],
         done: bool,
-    ):
-        state      = _discretize(obs)
-        next_state = _discretize(next_obs)
+    ) -> None:
+        if action not in ACTIONS:
+            return
 
-        # Normalize reward (stability)
-        reward = max(min(reward, 10), -10)
+        s = _discretize(obs)
+        ns = _discretize(next_obs)
+        self._ensure_state(s)
+        self._ensure_state(ns)
 
-        current_q  = self._get_q(state, action)
-        max_next_q = max(self._get_q(next_state, a) for a in ACTIONS) if not done else 0.0
-        target     = reward + self.gamma * max_next_q
-        new_q      = current_q + self.alpha * (target - current_q)
+        r = float(max(0.0, min(1.0, reward)))
+        cur = self.q[s][action]
+        nxt = 0.0 if done else max(self.q[ns].values())
+        target = r + self.gamma * nxt
+        self.q[s][action] = cur + self.alpha * (target - cur)
 
-        self._set_q(state, action, new_q)
+    def debug(self, obs: Dict[str, float]) -> AgentDebug:
+        s = _discretize(obs)
+        self._ensure_state(s)
+        return AgentDebug(
+            state=s,
+            q_values=dict(self.q[s]),
+            epsilon=float(self.epsilon),
+            visits=int(self.visits.get(s, 0)),
+        )
 
-        # Auto-save periodically
-        if random.random() < 0.05:
-            self.save()
-
-    # ── Hybrid Support ────────────────────────────────────────────────────────
-
-    def get_q_confidence(self, obs: Dict[str, float]) -> Dict[str, float]:
-        """
-        Returns normalized Q-values as probabilities
-        Used for RL + LLM fusion
-        """
-        state = _discretize(obs)
-        q_vals = [self._get_q(state, a) for a in ACTIONS]
-        probs = self._softmax(q_vals)
-
-        return {a: p for a, p in zip(ACTIONS, probs)}
-
-    # ── Debug / Explainability ────────────────────────────────────────────────
-
-    def debug_state(self, obs: Dict[str, float]) -> Dict:
-        state = _discretize(obs)
-        return {
-            "state": state,
-            "q_values": self.q.get(state, {}),
-            "visits": self.state_visits.get(state, 0),
-            "epsilon": self.epsilon
-        }
-
-    # ── Persistence ───────────────────────────────────────────────────────────
-
-    def save(self):
+    def save(self) -> None:
         try:
-            with open(QTABLE_PATH, "w") as f:
+            with open(QTABLE_PATH, "w", encoding="utf-8") as f:
                 json.dump(self.q, f)
-        except Exception as e:
-            print(f"[AGENT] Could not save Q-table: {e}")
+        except Exception:
+            pass
 
-    def _load(self):
-        if os.path.exists(QTABLE_PATH):
-            try:
-                with open(QTABLE_PATH) as f:
-                    self.q = json.load(f)
-                print(f"[AGENT] Q-table loaded ({len(self.q)} states)")
-            except Exception:
-                self.q = {}
+    def _load(self) -> None:
+        if not os.path.exists(QTABLE_PATH):
+            return
+        try:
+            with open(QTABLE_PATH, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                self.q = data
+        except Exception:
+            self.q = {}
