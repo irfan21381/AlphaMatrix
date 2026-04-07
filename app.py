@@ -45,6 +45,8 @@ class DisasterEnv:
 
     def reset(self, cpu: float = 85.0, battery: float = 30.0) -> dict:
         self._cpu, self._bat, self._step = float(cpu), float(battery), 0
+        st.session_state.learning_curve = []
+        st.session_state.confidence_hist = []
         return self._obs()
 
     def step(self, action: str):
@@ -205,14 +207,14 @@ if "backend_started" not in st.session_state:
     t = threading.Thread(target=_run_backend, daemon=True)
     t.start()
     st.session_state["backend_started"] = True
-    time.sleep(1.5)
+    time.sleep(3)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  PART 3 — STREAMLIT FRONTEND
 # ═══════════════════════════════════════════════════════════════════════════════
 
-BACKEND  = "http://localhost:8000"
+BACKEND  = "http://127.0.0.1:8000"
 INTERVAL = 0.8
 
 ACTION_COLORS = {
@@ -308,6 +310,17 @@ def _record(step, cpu, bat, rew, act):
     st.session_state.rew_hist.append(rew)
     st.session_state.act_hist.append(act)
     st.session_state.total_reward = round(st.session_state.total_reward + rew, 4)
+    # add below your existing code inside _record()
+
+    if "learning_curve" not in st.session_state:
+        st.session_state.learning_curve = []
+    st.session_state.learning_curve.append(st.session_state.total_reward)
+
+    if "confidence_hist" not in st.session_state:
+        st.session_state.confidence_hist = []
+
+    # simple confidence (temporary safe version)
+    st.session_state.confidence_hist.append([0.25, 0.25, 0.25, 0.25])
 
 
 def _log(msg):
@@ -569,171 +582,171 @@ if run_auto:
         st.rerun()
 
 
-# ===================== 🔥 NEW IMPORTS =====================
-from app.agent import QLearningAgent
+# # ===================== 🔥 NEW IMPORTS =====================
+# from app.agent import QLearningAgent
 
-# ===================== 🔥 HYBRID AGENT =====================
-class HybridAgent:
-    def __init__(self):
-        self.rl_agent = QLearningAgent()
-        self.memory = []
-        self.max_memory = 10
+# # ===================== 🔥 HYBRID AGENT =====================
+# class HybridAgent:
+#     def __init__(self):
+#         self.rl_agent = QLearningAgent()
+#         self.memory = []
+#         self.max_memory = 10
 
-    def remember(self, state):
-        self.memory.append(state)
-        if len(self.memory) > self.max_memory:
-            self.memory.pop(0)
+#     def remember(self, state):
+#         self.memory.append(state)
+#         if len(self.memory) > self.max_memory:
+#             self.memory.pop(0)
 
-    def plan(self, obs):
-        rl_probs = self.rl_agent.get_q_confidence(obs)
+#     def plan(self, obs):
+#         rl_probs = self.rl_agent.get_q_confidence(obs)
 
-        # Simulated LLM (can replace with OpenAI)
-        llm_action = random.choice(ACTIONS)
-        llm_conf = 0.6
+#         # Simulated LLM (can replace with OpenAI)
+#         llm_action = random.choice(ACTIONS)
+#         llm_conf = 0.6
 
-        scores = {}
-        for a in ACTIONS:
-            scores[a] = 0.7 * rl_probs.get(a, 0) + 0.3 * (llm_conf if a == llm_action else 0)
+#         scores = {}
+#         for a in ACTIONS:
+#             scores[a] = 0.7 * rl_probs.get(a, 0) + 0.3 * (llm_conf if a == llm_action else 0)
 
-        return max(scores, key=scores.get), scores
-
-
-# ===================== 🔥 SESSION INIT =====================
-if "hybrid_agent" not in st.session_state:
-    st.session_state.hybrid_agent = HybridAgent()
-
-if "confidence_hist" not in st.session_state:
-    st.session_state.confidence_hist = []
-
-if "learning_curve" not in st.session_state:
-    st.session_state.learning_curve = []
+#         return max(scores, key=scores.get), scores
 
 
-# ===================== 🔥 UPDATED RECORD =====================
+# # ===================== 🔥 SESSION INIT =====================
+# if "hybrid_agent" not in st.session_state:
+#     st.session_state.hybrid_agent = HybridAgent()
+
+# if "confidence_hist" not in st.session_state:
+#     st.session_state.confidence_hist = []
+
+# if "learning_curve" not in st.session_state:
+#     st.session_state.learning_curve = []
+
+
+# # ===================== 🔥 UPDATED RECORD =====================
+# # def _record(step, cpu, bat, rew, act):
+# #     st.session_state.steps.append(step)
+# #     st.session_state.cpu_hist.append(cpu)
+# #     st.session_state.bat_hist.append(bat)
+# #     st.session_state.rew_hist.append(rew)
+# #     st.session_state.act_hist.append(act)
+# #     st.session_state.total_reward += rew
+
+# #     # 🔥 learning curve
+# #     st.session_state.learning_curve.append(st.session_state.total_reward)
+
+# #     # 🔥 confidence tracking
+# #     state = {"cpu": cpu, "battery": bat}
+# #     _, scores = st.session_state.hybrid_agent.plan(state)
+# #     st.session_state.confidence_hist.append(list(scores.values()))
+
 # def _record(step, cpu, bat, rew, act):
 #     st.session_state.steps.append(step)
 #     st.session_state.cpu_hist.append(cpu)
 #     st.session_state.bat_hist.append(bat)
 #     st.session_state.rew_hist.append(rew)
 #     st.session_state.act_hist.append(act)
-#     st.session_state.total_reward += rew
 
-#     # 🔥 learning curve
+#     # ✅ FIX: cumulative reward
+#     st.session_state.total_reward = round(st.session_state.total_reward + rew, 4)
+
+#     # ✅ FIX: learning curve
+#     if "learning_curve" not in st.session_state:
+#         st.session_state.learning_curve = []
 #     st.session_state.learning_curve.append(st.session_state.total_reward)
 
-#     # 🔥 confidence tracking
+#     # ✅ FIX: confidence tracking
+#     if "confidence_hist" not in st.session_state:
+#         st.session_state.confidence_hist = []
+
 #     state = {"cpu": cpu, "battery": bat}
-#     _, scores = st.session_state.hybrid_agent.plan(state)
-#     st.session_state.confidence_hist.append(list(scores.values()))
 
-def _record(step, cpu, bat, rew, act):
-    st.session_state.steps.append(step)
-    st.session_state.cpu_hist.append(cpu)
-    st.session_state.bat_hist.append(bat)
-    st.session_state.rew_hist.append(rew)
-    st.session_state.act_hist.append(act)
-
-    # ✅ FIX: cumulative reward
-    st.session_state.total_reward = round(st.session_state.total_reward + rew, 4)
-
-    # ✅ FIX: learning curve
-    if "learning_curve" not in st.session_state:
-        st.session_state.learning_curve = []
-    st.session_state.learning_curve.append(st.session_state.total_reward)
-
-    # ✅ FIX: confidence tracking
-    if "confidence_hist" not in st.session_state:
-        st.session_state.confidence_hist = []
-
-    state = {"cpu": cpu, "battery": bat}
-
-    try:
-        _, scores = st.session_state.hybrid_agent.plan(state)
-        st.session_state.confidence_hist.append(list(scores.values()))
-    except:
-        # fallback to avoid crash
-        st.session_state.confidence_hist.append([0.25, 0.25, 0.25, 0.25])
+#     try:
+#         _, scores = st.session_state.hybrid_agent.plan(state)
+#         st.session_state.confidence_hist.append(list(scores.values()))
+#     except:
+#         # fallback to avoid crash
+#         st.session_state.confidence_hist.append([0.25, 0.25, 0.25, 0.25])
 
 
-# ===================== 🔥 CONFIDENCE GRAPH =====================
-def _confidence_plot():
-    fig, ax = plt.subplots(figsize=(6.5, 3.0), facecolor=DARK)
-    ax.set_facecolor(DARK)
+# # ===================== 🔥 CONFIDENCE GRAPH =====================
+# def _confidence_plot():
+#     fig, ax = plt.subplots(figsize=(6.5, 3.0), facecolor=DARK)
+#     ax.set_facecolor(DARK)
 
-    data = st.session_state.confidence_hist
-    if data:
-        data = np.array(data)
-        for i, a in enumerate(ACTIONS):
-            ax.plot(data[:, i], label=a)
+#     data = st.session_state.confidence_hist
+#     if data:
+#         data = np.array(data)
+#         for i, a in enumerate(ACTIONS):
+#             ax.plot(data[:, i], label=a)
 
-        ax.legend()
-        ax.set_title("Hybrid Confidence (RL + LLM)", color=TXT)
-    else:
-        ax.text(.5, .5, "No confidence data", ha="center", color=TXT)
+#         ax.legend()
+#         ax.set_title("Hybrid Confidence (RL + LLM)", color=TXT)
+#     else:
+#         ax.text(.5, .5, "No confidence data", ha="center", color=TXT)
 
-    return fig
-
-
-# ===================== 🔥 LEARNING CURVE =====================
-def _learning_plot():
-    fig, ax = plt.subplots(figsize=(6.5, 3.0), facecolor=DARK)
-    ax.set_facecolor(DARK)
-
-    data = st.session_state.learning_curve
-    if data:
-        ax.plot(data, linewidth=2)
-        ax.set_title("Learning Curve", color=TXT)
-    else:
-        ax.text(.5, .5, "No learning data", ha="center", color=TXT)
-
-    return fig
+#     return fig
 
 
-# ===================== 🔥 UPDATED AUTOPILOT =====================
-def _autopilot_action(obs: dict):
-    agent = st.session_state.hybrid_agent
-    agent.remember(obs)
-    action, scores = agent.plan(obs)
-    return action, "HYBRID_AI"
+# # ===================== 🔥 LEARNING CURVE =====================
+# def _learning_plot():
+#     fig, ax = plt.subplots(figsize=(6.5, 3.0), facecolor=DARK)
+#     ax.set_facecolor(DARK)
+
+#     data = st.session_state.learning_curve
+#     if data:
+#         ax.plot(data, linewidth=2)
+#         ax.set_title("Learning Curve", color=TXT)
+#     else:
+#         ax.text(.5, .5, "No learning data", ha="center", color=TXT)
+
+#     return fig
 
 
-# ===================== 🔥 GRAPH UI UPDATE =====================
-gc1, gc2 = st.columns(2)
-gc3, gc4 = st.columns(2)
-
-with gc1:
-    st.pyplot(_cpu_plot(), use_container_width=True)
-
-with gc2:
-    st.pyplot(_reward_plot(), use_container_width=True)
-
-with gc3:
-    st.pyplot(_confidence_plot(), use_container_width=True)
-
-with gc4:
-    st.pyplot(_learning_plot(), use_container_width=True)
+# # ===================== 🔥 UPDATED AUTOPILOT =====================
+# def _autopilot_action(obs: dict):
+#     agent = st.session_state.hybrid_agent
+#     agent.remember(obs)
+#     action, scores = agent.plan(obs)
+#     return action, "HYBRID_AI"
 
 
-# ===================== 🔥 AUTOPILOT LOOP UPDATE =====================
-if run_auto:
-    if not st.session_state.initialized:
-        st.warning("Please reset first.")
-    else:
-        for i in range(int(n_steps)):
-            sd, _ = _get("/state")
-            obs = sd["observation"]
-            ob0 = dict(obs)
+# # ===================== 🔥 GRAPH UI UPDATE =====================
+# gc1, gc2 = st.columns(2)
+# gc3, gc4 = st.columns(2)
 
-            act, src = _autopilot_action(obs)
-            rd, _ = _post("/step", {"action": act})
+# with gc1:
+#     st.pyplot(_cpu_plot(), use_container_width=True)
 
-            o = rd["observation"]
+# with gc2:
+#     st.pyplot(_reward_plot(), use_container_width=True)
 
-            # 🔥 RL LEARNING
-            st.session_state.hybrid_agent.rl_agent.update(ob0, act, rd["reward"], o, rd["done"])
-            st.session_state.hybrid_agent.rl_agent.save()
+# with gc3:
+#     st.pyplot(_confidence_plot(), use_container_width=True)
 
-            _record(sd["step"]+1, o["cpu"], o["battery"], rd["reward"], act)
+# with gc4:
+#     st.pyplot(_learning_plot(), use_container_width=True)
 
-            if rd["done"]:
-                break
+
+# # ===================== 🔥 AUTOPILOT LOOP UPDATE =====================
+# if run_auto:
+#     if not st.session_state.initialized:
+#         st.warning("Please reset first.")
+#     else:
+#         for i in range(int(n_steps)):
+#             sd, _ = _get("/state")
+#             obs = sd["observation"]
+#             ob0 = dict(obs)
+
+#             act, src = _autopilot_action(obs)
+#             rd, _ = _post("/step", {"action": act})
+
+#             o = rd["observation"]
+
+#             # 🔥 RL LEARNING
+#             st.session_state.hybrid_agent.rl_agent.update(ob0, act, rd["reward"], o, rd["done"])
+#             st.session_state.hybrid_agent.rl_agent.save()
+
+#             _record(sd["step"]+1, o["cpu"], o["battery"], rd["reward"], act)
+
+#             if rd["done"]:
+#                 break
