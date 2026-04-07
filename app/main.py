@@ -1,174 +1,150 @@
 """
-app/agent.py — Enhanced Q-Learning Agent (Hybrid Ready)
-
-Upgrades:
-✔ Softmax confidence output (for hybrid RL + LLM)
-✔ Adaptive epsilon decay
-✔ State visit tracking
-✔ Reward normalization
-✔ Auto-save improvements
-✔ Debug insights
+app/main.py — AlphaMatrix FastAPI Backend
+Thread-safe state machine. Runs on port 8000.
+All endpoints return OpenEnv-compliant JSON.
 """
 
-import random
-import json
-import os
-import math
-from typing import Dict, List
+import threading
+from typing import Optional
 
-ACTIONS = ["optimize_cpu", "close_apps", "throttle_gpu", "hibernate_idle"]
-QTABLE_PATH = os.path.join(os.path.dirname(__file__), "qtable.json")
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, Field
+
+from app.env import AlphaMatrixEnv, TASKS, ACTIONS
+
+# ── Schemas ───────────────────────────────────────────────────────────────────
+
+class ResetSchema(BaseModel):
+    task: str = Field(default="thermal_throttling",
+                      description=f"One of: {TASKS}")
+
+class StepSchema(BaseModel):
+    action: str
+
+class ExplainSchema(BaseModel):
+    task:        str
+    action:      str
+    state_before: dict
+    state_after:  dict
+
+# ── Shared state ──────────────────────────────────────────────────────────────
+
+_lock          = threading.Lock()
+_env           = AlphaMatrixEnv()
+_step_count    = 0
+_total_reward  = 0.0
+_history: list = []
+_initialized   = False
+_current_task  = "thermal_throttling"
+
+# ── App ───────────────────────────────────────────────────────────────────────
+
+app = FastAPI(title="AlphaMatrix OpenEnv API", version="1.0.0")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"], allow_methods=["*"], allow_headers=["*"],
+)
+
+# ── Endpoints ─────────────────────────────────────────────────────────────────
+
+@app.get("/health")
+def health():
+    return {"status": "ok"}
 
 
-def _discretize(obs: Dict[str, float]) -> str:
-    cpu = obs.get("cpu", 50.0)
-    bat = obs.get("battery", 50.0)
-
-    if cpu < 40:
-        c = "L"
-    elif cpu < 70:
-        c = "M"
-    elif cpu < 85:
-        c = "H"
-    else:
-        c = "C"
-
-    if bat < 20:
-        b = "L"
-    elif bat < 50:
-        b = "M"
-    else:
-        b = "H"
-
-    return f"cpu_{c}_bat_{b}"
+@app.get("/tasks")
+def list_tasks():
+    return {"tasks": TASKS, "actions": ACTIONS}
 
 
-class QLearningAgent:
-    def __init__(self, alpha: float = 0.1, gamma: float = 0.9, epsilon: float = 0.2):
-        self.alpha   = alpha
-        self.gamma   = gamma
-        self.epsilon = epsilon
+@app.post("/reset")
+def reset(body: Optional[ResetSchema] = None):
+    global _step_count, _total_reward, _history, _initialized, _current_task
+    task = (body.task if body else "thermal_throttling")
+    if task not in TASKS:
+        raise HTTPException(400, f"Unknown task '{task}'. Valid: {TASKS}")
 
-        self.epsilon_min = 0.05
-        self.epsilon_decay = 0.995
+    with _lock:
+        obs           = _env.reset(task=task)
+        _step_count   = 0
+        _total_reward = 0.0
+        _history      = []
+        _initialized  = True
+        _current_task = task
 
-        self.q: Dict[str, Dict[str, float]] = {}
-        self.state_visits: Dict[str, int] = {}
+    return {"status": "reset", "task": task, "observation": obs}
 
-        self._load()
 
-    # ── Q-table helpers ───────────────────────────────────────────────────────
+@app.post("/step")
+def step(body: StepSchema):
+    global _step_count, _total_reward, _history
+    if not _initialized:
+        raise HTTPException(400, "Call /reset first.")
 
-    def _get_q(self, state: str, action: str) -> float:
-        return self.q.get(state, {}).get(action, 0.0)
+    with _lock:
+        result        = _env.step(body.action)   # OpenEnv dict
+        _step_count  += 1
+        _total_reward += result["reward"]
+        record = {
+            "step":              _step_count,
+            "action":            body.action,
+            "observation":       result["observation"],
+            "reward":            result["reward"],
+            "cumulative_reward": round(_total_reward, 6),
+            "done":              result["done"],
+            "info":              result["info"],
+        }
+        _history.append(record)
 
-    def _set_q(self, state: str, action: str, value: float):
-        if state not in self.q:
-            self.q[state] = {a: 0.0 for a in ACTIONS}
-        self.q[state][action] = value
+    return record
 
-    # ── Softmax (for hybrid confidence) ───────────────────────────────────────
 
-    def _softmax(self, values: List[float]) -> List[float]:
-        exp_vals = [math.exp(v) for v in values]
-        total = sum(exp_vals)
-        return [v / total for v in exp_vals]
-
-    def get_action_with_confidence(self, obs: Dict[str, float]):
-        """
-        Returns:
-        action, confidence distribution
-        """
-        state = _discretize(obs)
-        q_vals = [self._get_q(state, a) for a in ACTIONS]
-        probs = self._softmax(q_vals)
-
-        best_idx = probs.index(max(probs))
-        return ACTIONS[best_idx], probs
-
-    # ── Policy ────────────────────────────────────────────────────────────────
-
-    def get_action(self, obs: Dict[str, float]) -> str:
-        state = _discretize(obs)
-
-        # Track visits
-        self.state_visits[state] = self.state_visits.get(state, 0) + 1
-
-        # Adaptive epsilon (less exploration over time)
-        if self.epsilon > self.epsilon_min:
-            self.epsilon *= self.epsilon_decay
-
-        if random.random() < self.epsilon:
-            return random.choice(ACTIONS)
-
-        q_vals = {a: self._get_q(state, a) for a in ACTIONS}
-        return max(q_vals, key=q_vals.get)
-
-    # ── Learning ──────────────────────────────────────────────────────────────
-
-    def update(
-        self,
-        obs: Dict[str, float],
-        action: str,
-        reward: float,
-        next_obs: Dict[str, float],
-        done: bool,
-    ):
-        state      = _discretize(obs)
-        next_state = _discretize(next_obs)
-
-        # Normalize reward (stability)
-        reward = max(min(reward, 10), -10)
-
-        current_q  = self._get_q(state, action)
-        max_next_q = max(self._get_q(next_state, a) for a in ACTIONS) if not done else 0.0
-        target     = reward + self.gamma * max_next_q
-        new_q      = current_q + self.alpha * (target - current_q)
-
-        self._set_q(state, action, new_q)
-
-        # Auto-save periodically
-        if random.random() < 0.05:
-            self.save()
-
-    # ── Hybrid Support ────────────────────────────────────────────────────────
-
-    def get_q_confidence(self, obs: Dict[str, float]) -> Dict[str, float]:
-        """
-        Returns normalized Q-values as probabilities
-        Used for RL + LLM fusion
-        """
-        state = _discretize(obs)
-        q_vals = [self._get_q(state, a) for a in ACTIONS]
-        probs = self._softmax(q_vals)
-
-        return {a: p for a, p in zip(ACTIONS, probs)}
-
-    # ── Debug / Explainability ────────────────────────────────────────────────
-
-    def debug_state(self, obs: Dict[str, float]) -> Dict:
-        state = _discretize(obs)
+@app.get("/state")
+def state():
+    if not _initialized:
+        raise HTTPException(400, "Call /reset first.")
+    with _lock:
         return {
-            "state": state,
-            "q_values": self.q.get(state, {}),
-            "visits": self.state_visits.get(state, 0),
-            "epsilon": self.epsilon
+            "task":         _current_task,
+            "observation":  _env.get_observation(),
+            "step":         _step_count,
+            "total_reward": round(_total_reward, 6),
+            "done":         _env.is_done(),
+            "actions":      ACTIONS[_current_task],
         }
 
-    # ── Persistence ───────────────────────────────────────────────────────────
 
-    def save(self):
-        try:
-            with open(QTABLE_PATH, "w") as f:
-                json.dump(self.q, f)
-        except Exception as e:
-            print(f"[AGENT] Could not save Q-table: {e}")
+@app.get("/history")
+def history():
+    with _lock:
+        return {
+            "task":         _current_task,
+            "step_count":   _step_count,
+            "total_reward": round(_total_reward, 6),
+            "history":      list(_history),
+        }
 
-    def _load(self):
-        if os.path.exists(QTABLE_PATH):
-            try:
-                with open(QTABLE_PATH) as f:
-                    self.q = json.load(f)
-                print(f"[AGENT] Q-table loaded ({len(self.q)} states)")
-            except Exception:
-                self.q = {}
+
+@app.post("/explain")
+def explain(body: ExplainSchema):
+    s0, s1 = body.state_before, body.state_after
+
+    # Compute deltas for any numeric key present in both states
+    deltas = {
+        k: round(s0[k] - s1.get(k, s0[k]), 3)
+        for k in s0 if isinstance(s0[k], (int, float))
+    }
+    improved_keys = [k for k, d in deltas.items() if d > 0]
+
+    rationale = (
+        f"Action `{body.action}` on task `{body.task}`. "
+        f"Improvements: {improved_keys if improved_keys else 'none this step'}. "
+        f"Deltas: {deltas}."
+    )
+    return {
+        "task":      body.task,
+        "action":    body.action,
+        "rationale": rationale,
+        "deltas":    deltas,
+    }
