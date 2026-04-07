@@ -1,6 +1,7 @@
 import json
 import os
 import sys
+import time
 from typing import Dict, List
 
 from app.agent import QLearningAgent
@@ -39,6 +40,11 @@ def step(env: ThermalEnv, action: str) -> Dict:
 
 def _emit(tag: str, payload: Dict) -> None:
     print(f"[{tag}] {json.dumps(payload, separators=(',', ':'), sort_keys=True)}", flush=True)
+
+
+def _running_on_hf_spaces() -> bool:
+    # HuggingFace Spaces sets SPACE_ID for running apps.
+    return bool(os.getenv("SPACE_ID") or os.getenv("HF_SPACE_ID") or os.getenv("SYSTEM") == "spaces")
 
 
 def run() -> None:
@@ -103,6 +109,11 @@ def run() -> None:
             "rewards": rewards,
         },
     )
+
+    # Spaces expects a long-running process; a clean exit is shown as "Runtime error".
+    if _running_on_hf_spaces():
+        while True:
+            time.sleep(3600)
 
 
 if __name__ == "__main__":
