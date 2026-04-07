@@ -1,18 +1,21 @@
-name: alphamatrix-rl-env
-
+name: RL-LLM Thermal Manager
 version: 1.0
 
-entrypoint: inference.py
+environment:
+  type: rl
+  observation_space:
+    cpu: float
+    battery: float
+  action_space:
+    - optimize_cpu
+    - close_apps
+    - throttle_gpu
+    - hibernate_idle
 
-description: Hybrid RL + LLM thermal management environment
+entrypoint:
+  reset: /reset
+  step: /step
 
-author: Irfan
-
-tags:
-  - reinforcement-learning
-  - llm
-  - hybrid-ai
-
-env:
-  TASK: thermal_throttling
-  MAX_STEPS: 20
+protocol:
+  reset_method: POST
+  step_method: POST
