@@ -1,89 +1,114 @@
-import sys
+import json
 import os
-from typing import List
+import sys
+from typing import Dict, List
 
 from app.agent import QLearningAgent
-from app.env import ACTIONS, ThermalEnv, TASK
+from app.env import ACTIONS, TASK, ThermalEnv
 
 MODEL_NAME = os.getenv("MODEL_NAME", "qlearning-agent")
-BENCHMARK = "alphamatrix"
+BENCHMARK = os.getenv("BENCHMARK", "alphamatrix")
 MAX_STEPS = int(os.getenv("MAX_STEPS", "20"))
 
-# TASK_ACTIONS = {
-#     "thermal_throttling": [
-#         "reduce_clock_speed",
-#         "kill_heavy_process",
-#         "enable_cooling_fan",
-#         "throttle_gpu",
-#     ]
-# }
 
-TASK_ACTIONS = {TASK: list(ACTIONS)}
-
-
-# ── LOGGING (STRICT FORMAT) ─────────────────────────
-
-def log_start():
-    print(f"[START] task={TASK} env={BENCHMARK} model={MODEL_NAME}", flush=True)
-
-def log_step(step, action, reward, done, error):
-    err = error if error else "null"
-    print(f"[STEP] step={step} action={action} reward={reward:.2f} done={str(done).lower()} error={err}", flush=True)
-
-def log_end(success, steps, score, rewards: List[float]):
-    rewards_str = ",".join(f"{r:.2f}" for r in rewards)
-    print(f"[END] success={str(success).lower()} steps={steps} score={score:.2f} rewards={rewards_str}", flush=True)
+def reset(env: ThermalEnv, cpu: float = 90.0, battery: float = 20.0) -> Dict:
+    """
+    OpenEnv-compatible reset payload:
+    {
+      "observation": {...},
+      "reward": 0,
+      "done": false,
+      "info": {}
+    }
+    """
+    return env.reset_openenv(cpu=cpu, battery=battery)
 
 
-def _env_rollout():
-    env = ThermalEnv()
-    obs = env.reset(cpu=90.0, battery=20.0)
-    return env, obs
+def step(env: ThermalEnv, action: str) -> Dict:
+    """
+    OpenEnv-style step payload:
+    {
+      "observation": {...},
+      "reward": <float>,
+      "done": <bool>,
+      "info": {...}
+    }
+    """
+    return env.step_openenv(action)
 
 
-# ── MAIN ───────────────────────────────────────────
+def _emit(tag: str, payload: Dict) -> None:
+    print(f"[{tag}] {json.dumps(payload, separators=(',', ':'), sort_keys=True)}", flush=True)
 
-def run():
-    actions = TASK_ACTIONS[TASK]
+
+def run() -> None:
+    env = ThermalEnv(max_steps=MAX_STEPS)
     agent = QLearningAgent()
-    env, obs = _env_rollout()
 
-    rewards = []
-    total = 0.0
+    _emit(
+        "START",
+        {
+            "task": TASK,
+            "env": BENCHMARK,
+            "model": MODEL_NAME,
+            "actions": list(ACTIONS),
+            "max_steps": MAX_STEPS,
+        },
+    )
+
+    r0 = reset(env, cpu=90.0, battery=20.0)
+    obs = dict(r0["observation"])
+
+    rewards: List[float] = []
     steps = 0
+    total = 0.0
+    success = False
 
-    log_start()
+    for i in range(1, MAX_STEPS + 1):
+        action, _conf = agent.act_with_confidence(obs)
+        out = step(env, action)
 
-    for step in range(1, MAX_STEPS + 1):
-
-        action = agent.act(obs)
-        res = env.step(action)
-        next_obs = res.observation
-        reward = float(res.reward)
-        done = bool(res.done)
-
-        rewards.append(reward)
-        total += reward
-        steps = step
+        reward = float(out.get("reward", 0.0))
+        done = bool(out.get("done", False))
+        next_obs = dict(out.get("observation", {}))
 
         agent.update(obs, action, reward, next_obs, done)
+        rewards.append(reward)
+        total += reward
+        steps = i
 
-        log_step(step, action, reward, done, None)
+        _emit(
+            "STEP",
+            {
+                "step": i,
+                "action": action,
+                "reward": reward,
+                "observation": next_obs,
+                "done": done,
+            },
+        )
 
         obs = next_obs
-
         if done:
+            success = True
             break
 
-    score = min(max(total / MAX_STEPS, 0.0), 1.0)
-    success = score > 0.1
-
-    log_end(success, steps, score, rewards)
+    score = float(total)
+    _emit(
+        "END",
+        {
+            "success": bool(success),
+            "steps": int(steps),
+            "score": score,
+            "rewards": rewards,
+        },
+    )
 
 
 if __name__ == "__main__":
     try:
         run()
-    except Exception:
-        log_end(False, 0, 0.0, [])
-    sys.exit(0)
+        sys.exit(0)
+    except Exception as e:
+        _emit("END", {"success": False, "steps": 0, "score": 0.0, "rewards": [], "error": str(e)})
+        sys.exit(0)
