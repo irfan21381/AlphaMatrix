@@ -1,0 +1,18 @@
+name: alphamatrix-rl-env
+
+version: 1.0
+
+entrypoint: inference.py
+
+description: Hybrid RL + LLM thermal management environment
+
+author: Irfan
+
+tags:
+  - reinforcement-learning
+  - llm
+  - hybrid-ai
+
+env:
+  TASK: thermal_throttling
+  MAX_STEPS: 20
