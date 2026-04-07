@@ -86,21 +86,21 @@ def _send_json(handler: BaseHTTPRequestHandler, status: int, obj: Dict[str, Any]
 
 class _Handler(BaseHTTPRequestHandler):
     def do_GET(self):  # noqa: N802
-        if self.path in ("/", "/health"):
-            body = (
-                "<html><head><title>OpenEnv Runner</title></head><body>"
-                "<h2>OpenEnv runner is alive</h2>"
-                "<p>Endpoints: <code>POST /reset</code>, <code>POST /step</code></p>"
-                f"<pre>{json.dumps(_LATEST, indent=2)}</pre>"
-                "</body></html>"
-            ).encode("utf-8")
-            self.send_response(200)
-            self.send_header("Content-Type", "text/html; charset=utf-8")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
-            return
-        _send_json(self, 404, {"error": "not_found"})
+        # Spaces / proxies may hit paths with query params like "/?logs=container".
+        # For any GET, serve a small health page; OpenEnv checks use POST for API calls.
+        body = (
+            "<html><head><title>OpenEnv Runner</title></head><body>"
+            "<h2>OpenEnv runner is alive</h2>"
+            "<p>Endpoints: <code>POST /reset</code>, <code>POST /step</code></p>"
+            f"<pre>{json.dumps(_LATEST, indent=2)}</pre>"
+            "</body></html>"
+        ).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+        return
 
     def do_POST(self):  # noqa: N802
         if self.path == "/reset":
