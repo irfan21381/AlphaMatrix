@@ -1,0 +1,6 @@
+version = 1
+revision = "validator-placeholder"
+
+# This repository is validated in environments that require a uv lockfile.
+# If you are developing locally with uv, regenerate this file with:
+#   uv lock
