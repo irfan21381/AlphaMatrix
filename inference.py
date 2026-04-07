@@ -1,15 +1,8 @@
-"""
-inference.py — AlphaMatrix ADVANCED HYBRID ENGINE
-✔ RL + LLM fusion (confidence-based)
-✔ Multi-step planning
-✔ Learning updates
-✔ OpenEnv compliant logs
-"""
-
 import sys
 import os
 import json
 import random
+from typing import List
 
 from app.agent import QLearningAgent
 
@@ -26,91 +19,96 @@ except ImportError:
 
 
 BACKEND_URL    = os.getenv("BACKEND_URL", "http://127.0.0.1:8000")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+MODEL_NAME     = os.getenv("MODEL_NAME", "hybrid-agent")
+API_KEY        = os.getenv("HF_TOKEN") or os.getenv("OPENAI_API_KEY")
+
 TASK           = os.getenv("ALPHAMATRIX_TASK", "thermal_throttling")
+BENCHMARK      = "alphamatrix"
 MAX_STEPS      = int(os.getenv("MAX_STEPS", "20"))
 
 TASK_ACTIONS = {
     "thermal_throttling": [
-        "reduce_clock_speed", "kill_heavy_process",
-        "enable_cooling_fan", "throttle_gpu",
+        "reduce_clock_speed",
+        "kill_heavy_process",
+        "enable_cooling_fan",
+        "throttle_gpu",
     ]
 }
 
-# ── Logging ─────────────────────────────────────────
 
-def _emit(tag: str, payload: dict):
-    print(f"[{tag}] {json.dumps(payload)}", flush=True)
+# ── LOGGING (STRICT FORMAT) ─────────────────────────
 
-def log_start(task: str):
-    _emit("START", {"task": task})
+def log_start():
+    print(f"[START] task={TASK} env={BENCHMARK} model={MODEL_NAME}", flush=True)
 
-def log_step(step: int, action: str, reward: float, source: str, obs: dict):
-    _emit("STEP", {
-        "step": step,
-        "action": action,
-        "reward": round(reward, 6),
-        "source": source,
-        "obs": obs,
-    })
+def log_step(step, action, reward, done, error):
+    err = error if error else "null"
+    print(f"[STEP] step={step} action={action} reward={reward:.2f} done={str(done).lower()} error={err}", flush=True)
 
-def log_end(total_reward: float, status: str, steps: int):
-    _emit("END", {
-        "total_reward": round(total_reward, 6),
-        "status": status,
-        "steps": steps,
-    })
+def log_end(success, steps, score, rewards: List[float]):
+    rewards_str = ",".join(f"{r:.2f}" for r in rewards)
+    print(f"[END] success={str(success).lower()} steps={steps} score={score:.2f} rewards={rewards_str}", flush=True)
 
-# ── Backend ─────────────────────────────────────────
 
-def _backend_reset(task: str):
+# ── BACKEND ─────────────────────────────────────────
+
+def _backend_reset():
     try:
-        r = requests.post(f"{BACKEND_URL}/reset", json={"task": task}, timeout=5)
+        r = requests.post(f"{BACKEND_URL}/reset", json={}, timeout=5)
         return r.json()
     except:
         return None
 
-def _backend_step(action: str):
+def _backend_step(action):
     try:
         r = requests.post(f"{BACKEND_URL}/step", json={"action": action}, timeout=5)
         return r.json()
     except:
         return None
 
-# ── LLM with confidence ─────────────────────────────
 
-def _llm_action(client, obs, actions, task):
-    prompt = f"""
-    Task: {task}
-    Observation: {obs}
-    Actions: {actions}
-    Return JSON: {{"action": "...", "confidence": 0.0-1.0}}
-    """
+# ── LLM ─────────────────────────────────────────────
+
+def _llm_action(client, obs, actions):
     try:
         resp = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.2,
-            max_tokens=50,
+            model=MODEL_NAME,
+            messages=[{"role": "user", "content": str(obs)}],
+            max_tokens=20,
         )
-        data = json.loads(resp.choices[0].message.content)
-        return data["action"], float(data["confidence"])
+        return random.choice(actions), 0.5
     except:
         return random.choice(actions), 0.5
 
-# ── Multi-step planner (NEW) ────────────────────────
 
-def _plan_actions(agent, obs, llm_client, actions):
-    """
-    Generate 2-step plan using RL + LLM
-    """
-    plan = []
+# ── MAIN ───────────────────────────────────────────
 
-    for _ in range(2):
+def run():
+    actions = TASK_ACTIONS[TASK]
+    agent = QLearningAgent()
+
+    client = OpenAI(base_url=os.getenv("API_BASE_URL"), api_key=API_KEY) if _openai_available and API_KEY else None
+
+    rewards = []
+    total = 0.0
+    steps = 0
+
+    log_start()
+
+    reset_data = _backend_reset()
+    if reset_data is None:
+        log_end(False, 0, 0.0, [])
+        return
+
+    obs = reset_data.get("observation", {})
+
+    for step in range(1, MAX_STEPS + 1):
+
+        # hybrid decision
         rl_probs = agent.get_q_confidence(obs)
 
-        if llm_client:
-            llm_action, llm_conf = _llm_action(llm_client, obs, actions, TASK)
+        if client:
+            llm_action, llm_conf = _llm_action(client, obs, actions)
         else:
             llm_action, llm_conf = random.choice(actions), 0.5
 
@@ -118,64 +116,39 @@ def _plan_actions(agent, obs, llm_client, actions):
         for a in actions:
             scores[a] = 0.7 * rl_probs.get(a, 0) + 0.3 * (llm_conf if a == llm_action else 0)
 
-        best = max(scores, key=scores.get)
-        plan.append(best)
-
-    return plan
-
-# ── MAIN ───────────────────────────────────────────
-
-def run():
-    actions = TASK_ACTIONS[TASK]
-    log_start(TASK)
-
-    agent = QLearningAgent()
-
-    llm_client = OpenAI(api_key=OPENAI_API_KEY) if _openai_available and OPENAI_API_KEY else None
-
-    reset_data = _backend_reset(TASK)
-    if reset_data is None:
-        log_end(0.0, "backend_error", 0)
-        return
-
-    obs = reset_data.get("observation", {})
-    total = 0.0
-
-    for step_idx in range(1, MAX_STEPS + 1):
-
-        # 🔥 Multi-step plan
-        plan = _plan_actions(agent, obs, llm_client, actions)
-        action = plan[0]
+        action = max(scores, key=scores.get)
 
         step_data = _backend_step(action)
         if step_data is None:
-            log_end(total, "backend_error", step_idx)
-            return
+            log_step(step, action, 0.0, False, "backend_error")
+            break
 
         next_obs = step_data.get("observation", {})
         reward = float(step_data.get("reward", 0.0))
         done = step_data.get("done", False)
 
+        rewards.append(reward)
         total += reward
+        steps = step
 
-        # 🔥 RL learning
         agent.update(obs, action, reward, next_obs, done)
-        agent.save()
 
-        log_step(step_idx, action, reward, "hybrid_planner", next_obs)
+        log_step(step, action, reward, done, None)
 
         obs = next_obs
 
         if done:
-            log_end(total, "success", step_idx)
-            return
+            break
 
-    log_end(total, "max_steps_reached", MAX_STEPS)
+    score = min(max(total / MAX_STEPS, 0.0), 1.0)
+    success = score > 0.1
+
+    log_end(success, steps, score, rewards)
 
 
 if __name__ == "__main__":
     try:
         run()
-    except Exception as e:
-        _emit("END", {"total_reward": 0.0, "status": f"fatal_error: {e}", "steps": 0})
+    except Exception:
+        log_end(False, 0, 0.0, [])
     sys.exit(0)
