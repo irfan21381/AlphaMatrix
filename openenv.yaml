@@ -1,21 +1,107 @@
-name: RL-LLM Thermal Manager
-version: 1.0
+name: rl-llm-thermal-manager
+version: "1.0.0"
+description: >
+  Hybrid RL + LLM thermal management agent.
+  Reduces CPU load and preserves battery via learned action policies
+  fused with a rule-based LLM surrogate.
 
 environment:
-  type: rl
+  name: ThermalThrottling
   observation_space:
-    cpu: float
-    battery: float
+    type: dict
+    fields:
+      cpu:
+        type: float
+        low: 0.0
+        high: 100.0
+        description: Current CPU utilization percentage
+      battery:
+        type: float
+        low: 0.0
+        high: 100.0
+        description: Current battery level percentage
+
   action_space:
-    - optimize_cpu
-    - close_apps
-    - throttle_gpu
-    - hibernate_idle
+    type: discrete
+    actions:
+      - optimize_cpu
+      - close_apps
+      - throttle_gpu
+      - hibernate_idle
 
-entrypoint:
-  reset: /reset
-  step: /step
+  reward:
+    type: float
+    low: 0.0
+    high: 1.0
+    description: >
+      Normalised improvement = (ΔCPU_reduction + ΔBattery_gain) / MAX_IMPROVE.
+      Clamped to [0.001, 1.0].
 
-protocol:
-  reset_method: POST
-  step_method: POST
+  terminal_conditions:
+    - cpu <= 60.0 AND battery >= 50.0
+    - steps >= 50
+
+agent:
+  name: HybridAgent
+  type: hybrid
+  components:
+    - name: QLearningAgent
+      type: reinforcement_learning
+      algorithm: Q-Learning
+      hyperparameters:
+        alpha: 0.1
+        gamma: 0.9
+        epsilon: 0.2
+        epsilon_min: 0.05
+        epsilon_decay: 0.995
+    - name: LLMSurrogate
+      type: rule_based_llm
+      fusion_weights:
+        rl: 0.7
+        llm: 0.3
+
+endpoints:
+  base_url: "http://localhost:7860"
+  routes:
+    - method: GET
+      path: /health
+      description: Health check
+    - method: GET
+      path: /
+      description: Root info
+    - method: POST
+      path: /reset
+      description: Reset environment
+      request_schema:
+        cpu: float
+        battery: float
+        incident_description: string
+    - method: POST
+      path: /step
+      description: Execute one action step
+      request_schema:
+        action: string
+    - method: GET
+      path: /state
+      description: Get current environment state
+    - method: GET
+      path: /history
+      description: Get full episode history
+    - method: POST
+      path: /explain
+      description: Get AI rationale for an action
+      request_schema:
+        action: string
+        state_before: object
+        state_after: object
+
+validation:
+  required_endpoints:
+    - POST /reset
+    - POST /step
+    - GET /state
+    - GET /health
+  response_format: json
+  reward_range: [0.0, 1.0]
+  done_field: done
+  observation_field: observation
