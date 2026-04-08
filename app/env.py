@@ -1,8 +1,6 @@
 """
-app/env.py — Thermal throttling environment (OpenEnv-style)
-
-Single task with a single, consistent action space:
-["optimize_cpu", "close_apps", "throttle_gpu", "hibernate_idle"]
+app/env.py — Thermal throttling environment (FINAL FIXED)
+Compatible with main.py (AlphaMatrixEnv + TASKS added)
 """
 
 from __future__ import annotations
@@ -11,10 +9,19 @@ import random
 from dataclasses import dataclass
 from typing import Dict, Tuple
 
-TASK = "thermal_throttling"
-ACTIONS = ["optimize_cpu", "close_apps", "throttle_gpu", "hibernate_idle"]
+# ✅ REQUIRED FOR MAIN.PY
+TASKS = ["thermal_throttling"]
 
-CPU_MIN = 5.0  # realistic lower bound (no 0.0)
+ACTIONS = {
+    "thermal_throttling": [
+        "optimize_cpu",
+        "close_apps",
+        "throttle_gpu",
+        "hibernate_idle"
+    ]
+}
+
+CPU_MIN = 5.0
 
 
 @dataclass
@@ -26,15 +33,6 @@ class StepResult:
 
 
 class ThermalEnv:
-    """
-    State:
-      - cpu:     0..100  (higher is worse)
-      - battery: 0..100  (higher is better)
-
-    Done when CPU is cool enough AND battery is healthy enough,
-    or max steps reached.
-    """
-
     def __init__(
         self,
         cpu_safe: float = 60.0,
@@ -51,46 +49,33 @@ class ThermalEnv:
         self._battery = 20.0
         self._step = 0
 
-    def reset(self, cpu: float = 90.0, battery: float = 20.0) -> Dict[str, float]:
+    def reset(self, cpu: float = 90.0, battery: float = 20.0):
         self._cpu = float(max(CPU_MIN, min(100.0, cpu)))
         self._battery = float(max(0.0, min(100.0, battery)))
         self._step = 0
-        return self.observation()
+        return self.get_observation()
 
-    def reset_openenv(self, cpu: float = 90.0, battery: float = 20.0) -> Dict:
-        """
-        OpenEnv-compatible reset payload:
-        {
-          "observation": {...},
-          "reward": 0,
-          "done": false,
-          "info": {}
+    def get_observation(self):
+        return {
+            "cpu": round(self._cpu, 3),
+            "battery": round(self._battery, 3)
         }
-        """
-        obs = self.reset(cpu=cpu, battery=battery)
-        return {"observation": obs, "reward": 0, "done": False, "info": {}}
 
-    def observation(self) -> Dict[str, float]:
-        return {"cpu": round(self._cpu, 3), "battery": round(self._battery, 3)}
-
-    def is_done(self) -> bool:
-        # Terminal conditions (per spec):
-        # - success if CPU < 20
-        # - or done if steps > max_steps (implemented as >= to stop at limit)
+    def is_done(self):
         return (self._cpu < 20.0) or (self._step >= self.max_steps)
 
-    def step(self, action: str) -> StepResult:
-        if action not in ACTIONS:
-            raise ValueError(f"Unknown action '{action}'. Must be one of {ACTIONS}.")
+    def step(self, action: str):
+        if action not in ACTIONS["thermal_throttling"]:
+            raise ValueError(f"Invalid action: {action}")
 
-        before = self.observation()
+        before = self.get_observation()
         cpu0, bat0 = self._cpu, self._battery
 
-        # Background drift: varying load + battery drain each step
+        # Background drift
         self._cpu = min(100.0, max(CPU_MIN, self._cpu + self._rng.uniform(-0.5, 3.5)))
         self._battery = min(100.0, max(0.0, self._battery - self._rng.uniform(0.4, 1.6)))
 
-        # Action effects (stochastic)
+        # Actions
         if action == "optimize_cpu":
             self._cpu -= self._rng.uniform(6.0, 14.0)
             self._battery += self._rng.uniform(-0.5, 2.0)
@@ -104,71 +89,50 @@ class ThermalEnv:
             self._cpu -= self._rng.uniform(3.0, 9.0)
             self._battery += self._rng.uniform(4.0, 10.0)
 
-        # Clamp CPU to realistic range (never 0.0)
+        # Clamp
         self._cpu = min(100.0, max(CPU_MIN, self._cpu))
         self._battery = min(100.0, max(0.0, self._battery))
         self._step += 1
 
-        after = self.observation()
+        after = self.get_observation()
 
-        # Reward realism (can be positive or negative):
-        # + CPU reduction (good)
-        # + Battery preservation (good)
-        # - step/action penalty (too many actions is bad)
-        # - over-throttling penalty if CPU pushed too low
-        d_cpu = float(cpu0 - self._cpu)
-        d_bat = float(self._battery - bat0)
+        # Reward
+        d_cpu = cpu0 - self._cpu
+        d_bat = self._battery - bat0
 
         step_penalty = 0.1
         over_throttle_penalty = 0.0
+
         if self._cpu < 10.0:
             over_throttle_penalty = (10.0 - self._cpu) * 0.2
 
         reward = (d_cpu * 0.5) + (d_bat * 0.3) - step_penalty - over_throttle_penalty
 
-        done = self.is_done()
-        info = {
-            "task": TASK,
-            "action": action,
-            "step": self._step,
-            "delta_cpu": round(before["cpu"] - after["cpu"], 3),
-            "delta_battery": round(after["battery"] - before["battery"], 3),
-            "goal": {"success_cpu_lt": 20.0, "max_steps": self.max_steps},
-        }
-
-        return StepResult(observation=after, reward=round(float(reward), 6), done=done, info=info)
-
-    def step_openenv(self, action: str) -> Dict:
-        """
-        OpenEnv-style step payload:
-        {
-          "observation": {...},
-          "reward": <float>,
-          "done": <bool>,
-          "info": {...}
-        }
-        """
-        res = self.step(action)
         return {
-            "observation": res.observation,
-            "reward": float(res.reward),
-            "done": bool(res.done),
-            "info": dict(res.info),
+            "observation": after,
+            "reward": round(float(reward), 6),
+            "done": self.is_done(),
+            "info": {
+                "task": "thermal_throttling",
+                "action": action,
+                "step": self._step,
+            },
         }
 
 
-def explain_action(action: str, state_before: Dict[str, float], state_after: Dict[str, float]) -> Tuple[str, Dict[str, float]]:
-    dc = float(state_before.get("cpu", 0.0) - state_after.get("cpu", 0.0))
-    db = float(state_after.get("battery", 0.0) - state_before.get("battery", 0.0))
-    deltas = {"cpu": round(dc, 3), "battery": round(db, 3)}
+# ✅ WRAPPER REQUIRED BY main.py
+class AlphaMatrixEnv:
+    def __init__(self):
+        self.env = ThermalEnv()
 
-    if action == "optimize_cpu":
-        msg = "Rebalanced CPU scheduling and reduced background contention to cool the CPU with minimal battery impact."
-    elif action == "close_apps":
-        msg = "Terminated high-load background apps to quickly cut CPU usage while improving battery stability."
-    elif action == "throttle_gpu":
-        msg = "Throttled GPU to reduce thermal pressure and improve efficiency, trading peak graphics throughput for stability."
-    else:
-        msg = "Hibernated idle processes to steadily reduce heat and recover battery by minimizing unnecessary work."
+    def reset(self, task="thermal_throttling"):
+        return self.env.reset()
 
-    return msg, deltas
+    def step(self, action: str):
+        return self.env.step(action)
+
+    def get_observation(self):
+        return self.env.get_observation()
+
+    def is_done(self):
+        return self.env.is_done()
