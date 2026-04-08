@@ -152,6 +152,8 @@ def run():
     success = False
 
     for i in range(1, MAX_STEPS + 1):
+        _LATEST["steps"] = i   # ✅ FIX: update steps for UI
+
         action, _ = _AGENT.act_with_confidence(obs)
         out = step_openenv(action)
 
