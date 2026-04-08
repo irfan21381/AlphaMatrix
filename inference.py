@@ -500,7 +500,7 @@ class _Handler(BaseHTTPRequestHandler):
     def log_message(self, format, *args): return
 
 def _serve_forever() -> None:
-    port = int(os.getenv("PORT", "8000")) # Use 8000 for internal backend spec
+    port = int(os.getenv("PORT", "7860")) # Use 8000 for internal backend spec
     httpd = HTTPServer(("0.0.0.0", port), _Handler)
     httpd.serve_forever()
 
@@ -556,17 +556,29 @@ def _demo_rollout() -> None:
     _LATEST["end"] = end_payload
     _emit("END", end_payload)
 
-def main() -> None:
+#def main() -> None:
     # Start OpenEnv API for POST /reset validation on port 8000
-    t = threading.Thread(target=_serve_forever, daemon=True)
-    t.start()
+   # t = threading.Thread(target=_serve_forever, daemon=True)
+    #
     
     # Run a single rollout to generate logs for the grader
-    _demo_rollout()
+   # _demo_rollout()
 
     # Keep container alive for agentic evaluation
-    while True:
-        time.sleep(3600)
+   # while True:
+       # time.sleep(3600)
+
+
+def main() -> None:
+    # Start OpenEnv API
+    t = threading.Thread(target=_serve_forever)
+    t.start()
+    
+    # Run rollout (fast execution)
+    _demo_rollout()
+
+    # Keep server alive properly (IMPORTANT)
+    t.join()
 
 if __name__ == "__main__":
     try:
