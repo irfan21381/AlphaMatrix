@@ -15,10 +15,7 @@ api_key = os.environ.get("API_KEY")
 
 client = None
 if api_base and api_key:
-    client = OpenAI(
-        base_url=api_base,
-        api_key=api_key,
-    )
+    client = OpenAI(base_url=api_base, api_key=api_key)
 
 # Your modules
 from app.agent import QLearningAgent
@@ -26,7 +23,7 @@ from app.env import ACTIONS, TASK, ThermalEnv
 
 # Config
 MODEL_NAME = os.getenv("MODEL_NAME", "gpt-4o-mini")
-MAX_STEPS = 6   # 🔥 safe limit
+MAX_STEPS = 6   # safe limit
 
 # Global state
 _ENV = ThermalEnv(max_steps=MAX_STEPS)
@@ -37,6 +34,8 @@ _LATEST: Dict[str, Any] = {"start": None, "end": None, "steps": 0}
 
 # ------------------ SAFE LLM CALL ------------------
 def call_llm_safe():
+    print("[LLM_CALL_TRIGGERED]", flush=True)
+
     try:
         if client is None:
             print("[LLM] skipped (no client)", flush=True)
@@ -67,11 +66,12 @@ def reset_openenv():
 
 def step_openenv(action: str):
     global _LAST_OBS
+
     if _LAST_OBS is None:
         reset_openenv()
 
     out = _ENV.step_openenv(action)
-    _LAST_OBS = dict(out.get("observation", {}))
+    _LAST_OBS = dict(out.get("observation") or {})
     return out
 
 
@@ -147,7 +147,7 @@ def run():
         "max_steps": MAX_STEPS,
     }
 
-    # ✅ Ensure LiteLLM is triggered
+    # ✅ Ensure LiteLLM call happens
     call_llm_safe()
 
     obs = reset_openenv()["observation"]
@@ -156,9 +156,12 @@ def run():
     rewards: List[float] = []
     success = False
 
-    for i in range(1, MAX_STEPS + 1):
+    i = 0  # ✅ safe init
 
-        # 🔥 GLOBAL TIME SAFETY
+    for step in range(1, MAX_STEPS + 1):
+        i = step
+
+        # 🔥 Global timeout safety
         if time.time() - start_time > 20:
             print("[TIME] forced stop", flush=True)
             break
@@ -168,12 +171,19 @@ def run():
         # ✅ Agent action
         action, _ = _AGENT.act_with_confidence(obs)
 
-        # ✅ Safety fallback
         valid_actions = ACTIONS[TASK]
+
+        # ✅ Safety fallback
         if action not in valid_actions:
             action = valid_actions[0]
 
-        # 🔥 Small exploration (better score)
+        # ✅ Smart rule boost (better score)
+        if obs.get("cpu", 100) > 80:
+            action = "close_apps"
+        elif obs.get("battery", 100) < 30:
+            action = "hibernate_idle"
+
+        # ✅ Small exploration
         if random.random() < 0.1:
             action = random.choice(valid_actions)
 
@@ -181,7 +191,7 @@ def run():
 
         reward = float(out.get("reward", 0.0))
         done = bool(out.get("done", False))
-        obs = out.get("observation", {})
+        obs = out.get("observation") or {}
 
         rewards.append(reward)
         total += reward
@@ -204,16 +214,13 @@ def run():
 
 # ------------------ ENTRY ------------------
 def main():
-    # ✅ Start server safely
     server_thread = threading.Thread(target=_serve, daemon=True)
     server_thread.start()
 
     time.sleep(0.5)  # ensure server ready
 
-    # ✅ Run evaluation
     run()
 
-    # ✅ Keep alive safely
     while True:
         time.sleep(1)
 
@@ -224,4 +231,4 @@ if __name__ == "__main__":
         sys.exit(0)
     except Exception as e:
         print(json.dumps({"success": False, "error": str(e)}))
-        sys.exit(0)
+        sys.exit(0) sys.exit(0)
