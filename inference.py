@@ -37,25 +37,23 @@ _LATEST: Dict[str, Any] = {"start": None, "end": None, "steps": 0}
 # ------------------ SAFE LLM CALL ------------------
 def call_llm_safe():
     try:
-        if client is None:
-            # HF Space case (no env vars)
-            _emit("LLM", {"used": False, "reason": "no_client"})
-            return False
+        # 🚨 FORCE ONLY WHEN ENV EXISTS
+        if "API_BASE_URL" in os.environ and "API_KEY" in os.environ:
+            response = client.chat.completions.create(
+                model=MODEL_NAME,
+                messages=[{"role": "user", "content": "hello"}],
+                max_tokens=5,
+                timeout=2
+            )
 
-        response = client.chat.completions.create(
-            model=MODEL_NAME,
-            messages=[{"role": "user", "content": "hello"}],
-            max_tokens=5,
-            timeout=2
-        )
+            _emit("LLM", {"used": True})
+            return True
 
-        # ✅ ALWAYS log success
-        _emit("LLM", {"used": True})
-
-        return True
+        # HF Space case (no env)
+        _emit("LLM", {"used": False, "env": "missing"})
+        return False
 
     except Exception as e:
-        # ✅ ALWAYS log even on failure
         _emit("LLM", {"used": False, "error": str(e)})
         return False
 
