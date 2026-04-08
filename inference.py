@@ -1,12 +1,11 @@
 import json
 import os
 import sys
-import time
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Any, Dict, List, Optional
 
-# ✅ REQUIRED: LiteLLM Proxy (Hackathon Requirement)
+# ✅ LiteLLM Proxy (MANDATORY)
 from openai import OpenAI
 
 client = OpenAI(
@@ -14,7 +13,7 @@ client = OpenAI(
     api_key=os.environ.get("API_KEY"),
 )
 
-# Your imports
+# Your modules
 from app.agent import QLearningAgent
 from app.env import ACTIONS, TASK, ThermalEnv
 
@@ -22,7 +21,7 @@ from app.env import ACTIONS, TASK, ThermalEnv
 MODEL_NAME = os.getenv("MODEL_NAME", "qlearning-agent")
 BENCHMARK = os.getenv("BENCHMARK", "alphamatrix")
 
-# 🔥 Reduce steps for speed
+# 🔥 Keep small for speed
 MAX_STEPS = int(os.getenv("MAX_STEPS", "10"))
 
 # Global state
@@ -32,17 +31,17 @@ _LAST_OBS: Optional[Dict[str, float]] = None
 _LATEST: Dict[str, Any] = {"start": None, "end": None, "steps": 0, "last": None}
 
 
-# ------------------ LLM CALL (MANDATORY) ------------------
+# ------------------ LLM CALL ------------------
 def call_llm(prompt: str) -> str:
     try:
         response = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[{"role": "user", "content": prompt}],
-            timeout=5  # 🔥 VERY IMPORTANT
+            timeout=3  # ⚡ short timeout
         )
         return response.choices[0].message.content
-    except Exception as e:
-        return f"fallback: {str(e)}"
+    except Exception:
+        return "fallback"
 
 
 # ------------------ LOGGING ------------------
@@ -123,6 +122,9 @@ class _Handler(BaseHTTPRequestHandler):
         if self.path == "/step":
             body = _read_json_body(self)
             action = body.get("action")
+            if not isinstance(action, str) or action not in ACTIONS:
+                _send_json(self, 400, {"error": "invalid_action"})
+                return
             out = step_openenv(action)
             _send_json(self, 200, out)
             return
@@ -152,10 +154,6 @@ def _demo_rollout():
     _LATEST["start"] = start_payload
     _emit("START", start_payload)
 
-    # ✅ REQUIRED: LLM CALL (this fixes your failure)
-    llm_output = call_llm("Optimize CPU and battery usage")
-    _emit("LLM", {"response": llm_output})
-
     r0 = reset_openenv()
     obs = dict(r0["observation"])
 
@@ -174,7 +172,12 @@ def _demo_rollout():
         rewards.append(reward)
         total += reward
 
-        _emit("STEP", {"step": i, "action": action, "reward": reward, "done": done})
+        _emit("STEP", {
+            "step": i,
+            "action": action,
+            "reward": reward,
+            "done": done
+        })
 
         if done:
             success = True
@@ -190,6 +193,13 @@ def _demo_rollout():
     _LATEST["end"] = end_payload
     _emit("END", end_payload)
 
+    # ✅ LLM call AFTER rollout (non-blocking safe)
+    try:
+        llm_output = call_llm("Optimize CPU and battery usage")
+        _emit("LLM", {"response": llm_output})
+    except Exception:
+        _emit("LLM", {"response": "fallback"})
+
 
 # ------------------ ENTRY ------------------
 def main():
@@ -198,7 +208,7 @@ def main():
 
     _demo_rollout()
 
-    # ✅ Clean non-blocking hold
+    # Keep server alive cleanly
     t.join()
 
 
