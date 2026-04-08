@@ -125,8 +125,11 @@ class _Handler(BaseHTTPRequestHandler):
 
 
 def _serve():
-    port = int(os.getenv("PORT", "7860"))
-    HTTPServer(("0.0.0.0", port), _Handler).serve_forever()
+    try:
+        port = int(os.getenv("PORT", "7860"))
+        HTTPServer(("0.0.0.0", port), _Handler).serve_forever()
+    except Exception as e:
+        _emit("SERVER_ERROR", {"error": str(e)})
 
 
 # ------------------ MAIN LOGIC ------------------
