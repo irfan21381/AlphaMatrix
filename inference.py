@@ -209,17 +209,17 @@ def run():
     print(f"[END] {_LATEST['end']}", flush=True)
 
 
-# ------------------ ENTRY ------------------
-def main():
-    server_thread = threading.Thread(target=_serve, daemon=True)
-    server_thread.start()
+# # ------------------ ENTRY ------------------
+# def main():
+#     server_thread = threading.Thread(target=_serve, daemon=True)
+#     server_thread.start()
 
-    time.sleep(0.5)
-    run()
+#     time.sleep(0.5)
+#     run()
 
-    # Keep alive
-    while True:
-        time.sleep(1)
+#     # Keep alive
+#     while True:
+#         time.sleep(1)
 
 
 if __name__ == "__main__":
