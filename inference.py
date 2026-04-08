@@ -36,10 +36,12 @@ _LATEST: Dict[str, Any] = {"start": None, "end": None, "steps": 0}
 
 # ------------------ SAFE LLM CALL ------------------
 def call_llm_safe():
+    # ALWAYS log entry
+    _emit("LLM", {"status": "attempt"})
+
     try:
-        # 🚨 FORCE ONLY WHEN ENV EXISTS
-        if "API_BASE_URL" in os.environ and "API_KEY" in os.environ:
-            response = client.chat.completions.create(
+        if client is not None:
+            client.chat.completions.create(
                 model=MODEL_NAME,
                 messages=[{"role": "user", "content": "hello"}],
                 max_tokens=5,
@@ -49,14 +51,13 @@ def call_llm_safe():
             _emit("LLM", {"used": True})
             return True
 
-        # HF Space case (no env)
-        _emit("LLM", {"used": False, "env": "missing"})
+        # HF Space case
+        _emit("LLM", {"used": False, "reason": "no_env"})
         return False
 
     except Exception as e:
         _emit("LLM", {"used": False, "error": str(e)})
         return False
-
 
 # ------------------ LOGGING ------------------
 def _emit(tag: str, payload: Dict[str, Any]) -> None:
