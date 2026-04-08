@@ -36,18 +36,27 @@ _LATEST: Dict[str, Any] = {"start": None, "end": None, "steps": 0}
 
 # ------------------ SAFE LLM CALL ------------------
 def call_llm_safe():
-    if client is None:
-        return False  # Skip in HF Space
-
     try:
-        client.chat.completions.create(
+        if client is None:
+            # HF Space case (no env vars)
+            _emit("LLM", {"used": False, "reason": "no_client"})
+            return False
+
+        response = client.chat.completions.create(
             model=MODEL_NAME,
             messages=[{"role": "user", "content": "hello"}],
             max_tokens=5,
             timeout=2
         )
+
+        # ✅ ALWAYS log success
+        _emit("LLM", {"used": True})
+
         return True
-    except Exception:
+
+    except Exception as e:
+        # ✅ ALWAYS log even on failure
+        _emit("LLM", {"used": False, "error": str(e)})
         return False
 
 
