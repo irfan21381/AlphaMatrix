@@ -21,14 +21,11 @@ if api_base and api_key:
 from app.agent import QLearningAgent
 from app.env import ACTIONS, TASKS, ThermalEnv
 
-# ✅ Fix: define TASK properly
 TASK = TASKS[0]
 
-# Config
 MODEL_NAME = os.getenv("MODEL_NAME", "gpt-4o-mini")
 MAX_STEPS = 6
 
-# Global state
 _ENV = ThermalEnv(max_steps=MAX_STEPS)
 _AGENT = QLearningAgent()
 _LAST_OBS: Optional[Dict[str, float]] = None
@@ -41,7 +38,7 @@ def call_llm_safe():
 
     try:
         if client is None:
-            print("[LLM] skipped (no client)", flush=True)
+            print("[LLM] ERROR: client not initialized", flush=True)
             return False
 
         client.chat.completions.create(
@@ -63,7 +60,7 @@ def call_llm_safe():
 def reset_openenv():
     global _LAST_OBS
 
-    obs = _ENV.reset(cpu=90.0, battery=20.0)  # ✅ FIXED
+    obs = _ENV.reset(cpu=90.0, battery=20.0)
     _LAST_OBS = dict(obs)
 
     return {"observation": obs}
@@ -75,7 +72,7 @@ def step_openenv(action: str):
     if _LAST_OBS is None:
         reset_openenv()
 
-    out = _ENV.step(action)  # ✅ FIXED
+    out = _ENV.step(action)
     _LAST_OBS = dict(out.get("observation") or {})
 
     return out
@@ -153,8 +150,8 @@ def run():
         "max_steps": MAX_STEPS,
     }
 
-    # ✅ Ensure LiteLLM call happens
-    call_llm_safe()
+    # ✅ REQUIRED for hackathon
+    llm_ok = call_llm_safe()
 
     obs = reset_openenv()["observation"]
 
@@ -178,13 +175,11 @@ def run():
         if action not in valid_actions:
             action = valid_actions[0]
 
-        # ✅ Smart rules
         if obs.get("cpu", 100) > 80:
             action = "close_apps"
         elif obs.get("battery", 100) < 30:
             action = "hibernate_idle"
 
-        # ✅ Exploration
         if random.random() < 0.1:
             action = random.choice(valid_actions)
 
@@ -208,6 +203,7 @@ def run():
         "steps": i,
         "score": total,
         "rewards": rewards,
+        "llm_called": llm_ok
     }
 
     print(f"[END] {_LATEST['end']}", flush=True)
@@ -221,6 +217,7 @@ def main():
     time.sleep(0.5)
     run()
 
+    # Keep alive
     while True:
         time.sleep(1)
 
@@ -228,7 +225,14 @@ def main():
 if __name__ == "__main__":
     try:
         main()
+        print(json.dumps({
+            "success": True,
+            "message": "Execution completed"
+        }))
         sys.exit(0)
     except Exception as e:
-        print(json.dumps({"success": False, "error": str(e)}))
+        print(json.dumps({
+            "success": False,
+            "error": str(e)
+        }))
         sys.exit(0)
