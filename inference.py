@@ -188,12 +188,16 @@ def run():
 
 # ------------------ ENTRY ------------------
 def main():
-    t = threading.Thread(target=_serve)
+    # ✅ run server safely in background
+    t = threading.Thread(target=_serve, daemon=True)
     t.start()
 
+    # ✅ run evaluation
     run()
 
-    t.join()
+    # ✅ keep container alive safely (non-blocking)
+    while True:
+        pass
 
 
 if __name__ == "__main__":
