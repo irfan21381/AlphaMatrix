@@ -224,15 +224,27 @@ def main():
 
 if __name__ == "__main__":
     try:
-        main()
+        # Start server thread
+        server_thread = threading.Thread(target=_serve, daemon=True)
+        server_thread.start()
+
+        time.sleep(0.5)
+
+        # Run logic ONCE
+        run()
+
+        # ✅ FINAL SUCCESS OUTPUT (IMPORTANT FOR HACKATHON)
         print(json.dumps({
             "success": True,
-            "message": "Execution completed"
+            "result": _LATEST
         }))
-        sys.exit(0)
+
+        # Keep server alive (without breaking output)
+        while True:
+            time.sleep(1)
+
     except Exception as e:
         print(json.dumps({
             "success": False,
             "error": str(e)
         }))
-        sys.exit(0)
