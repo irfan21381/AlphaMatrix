@@ -84,45 +84,70 @@ def step_openenv(action: str):
 
 # ------------------ SERVER ------------------
 class _Handler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        body = (
-            "<html><body><h2>OpenEnv runner is alive</h2>"
-            f"<pre>{json.dumps(_LATEST, indent=2)}</pre></body></html>"
-        ).encode()
 
-        self.send_response(200)
-        self.send_header("Content-Type", "text/html")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+    def do_GET(self):
+        try:
+            body = (
+                "<html><body><h2>OpenEnv runner is alive</h2>"
+                f"<pre>{json.dumps(_LATEST, indent=2)}</pre></body></html>"
+            ).encode()
+
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        except Exception as e:
+            self.send_response(500)
+            self.end_headers()
+
 
     def do_POST(self):
-        if self.path == "/reset":
-            out = reset_openenv()
-            self._send(out)
-            return
+        try:
+            if self.path == "/reset":
+                out = reset_openenv()
+                self._send(out)
+                return
 
-        if self.path == "/step":
-            length = int(self.headers.get("Content-Length", 0))
-            body = json.loads(self.rfile.read(length) or "{}")
-            action = body.get("action", list(ACTIONS)[0])
-            out = step_openenv(action)
-            self._send(out)
-            return
+            if self.path == "/step":
+                # ✅ Safe JSON parsing
+                try:
+                    length = int(self.headers.get("Content-Length", 0))
+                    raw = self.rfile.read(length)
+                    body = json.loads(raw or "{}")
+                except Exception:
+                    body = {}
 
-        self._send({"error": "not_found"}, 404)
+                # ✅ Safe action handling
+                action = body.get("action")
+                if action not in ACTIONS:
+                    action = ACTIONS[0]
+
+                out = step_openenv(action)
+                self._send(out)
+                return
+
+            self._send({"error": "not_found"}, 404)
+
+        except Exception as e:
+            self._send({"error": str(e)}, 500)
+
 
     def _send(self, obj, status=200):
-        data = json.dumps(obj).encode()
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(data)))
-        self.end_headers()
-        self.wfile.write(data)
+        try:
+            data = json.dumps(obj).encode()
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+        except Exception:
+            pass
+
 
     def log_message(self, *args):
         return
-
 
 def _serve():
     try:
