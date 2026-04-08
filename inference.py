@@ -17,13 +17,16 @@ client = None
 if api_base and api_key:
     client = OpenAI(base_url=api_base, api_key=api_key)
 
-# Your modules
+# ✅ Your modules
 from app.agent import QLearningAgent
-from app.env import ACTIONS, TASK, ThermalEnv
+from app.env import ACTIONS, TASKS, ThermalEnv
+
+# ✅ Fix: define TASK properly
+TASK = TASKS[0]
 
 # Config
 MODEL_NAME = os.getenv("MODEL_NAME", "gpt-4o-mini")
-MAX_STEPS = 6   # safe limit
+MAX_STEPS = 6
 
 # Global state
 _ENV = ThermalEnv(max_steps=MAX_STEPS)
@@ -59,9 +62,11 @@ def call_llm_safe():
 # ------------------ ENV ------------------
 def reset_openenv():
     global _LAST_OBS
-    out = _ENV.reset_openenv(cpu=90.0, battery=20.0)
-    _LAST_OBS = dict(out["observation"])
-    return out
+
+    obs = _ENV.reset(cpu=90.0, battery=20.0)  # ✅ FIXED
+    _LAST_OBS = dict(obs)
+
+    return {"observation": obs}
 
 
 def step_openenv(action: str):
@@ -70,8 +75,9 @@ def step_openenv(action: str):
     if _LAST_OBS is None:
         reset_openenv()
 
-    out = _ENV.step_openenv(action)
+    out = _ENV.step(action)  # ✅ FIXED
     _LAST_OBS = dict(out.get("observation") or {})
+
     return out
 
 
@@ -155,35 +161,30 @@ def run():
     total = 0.0
     rewards: List[float] = []
     success = False
-
-    i = 0  # ✅ safe init
+    i = 0
 
     for step in range(1, MAX_STEPS + 1):
         i = step
 
-        # 🔥 Global timeout safety
         if time.time() - start_time > 20:
             print("[TIME] forced stop", flush=True)
             break
 
         _LATEST["steps"] = i
 
-        # ✅ Agent action
         action, _ = _AGENT.act_with_confidence(obs)
-
         valid_actions = ACTIONS[TASK]
 
-        # ✅ Safety fallback
         if action not in valid_actions:
             action = valid_actions[0]
 
-        # ✅ Smart rule boost (better score)
+        # ✅ Smart rules
         if obs.get("cpu", 100) > 80:
             action = "close_apps"
         elif obs.get("battery", 100) < 30:
             action = "hibernate_idle"
 
-        # ✅ Small exploration
+        # ✅ Exploration
         if random.random() < 0.1:
             action = random.choice(valid_actions)
 
@@ -217,8 +218,7 @@ def main():
     server_thread = threading.Thread(target=_serve, daemon=True)
     server_thread.start()
 
-    time.sleep(0.5)  # ensure server ready
-
+    time.sleep(0.5)
     run()
 
     while True:
