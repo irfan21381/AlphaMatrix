@@ -231,4 +231,4 @@ if __name__ == "__main__":
         sys.exit(0)
     except Exception as e:
         print(json.dumps({"success": False, "error": str(e)}))
-        sys.exit(0) sys.exit(0)
+        sys.exit(0)
